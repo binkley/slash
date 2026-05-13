@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+
+IMAGE_NAME="slash"
+SCRIPT_FILE="game.sh"
+DOCKERFILE="Dockerfile"
+
+# 1. CHECK FOR BUILD REQUIREMENTS
+if [[ ! -f "$SCRIPT_FILE" || ! -f "$DOCKERFILE" ]]; then
+    echo "Error: $SCRIPT_FILE or $DOCKERFILE not found in current directory."
+    exit 1
+fi
+
+# 2. SMART REBUILD LOGIC
+# We check if the image exists OR if the script has been modified since the image was created.
+SHOULD_BUILD=false
+if [[ "$(docker images -q $IMAGE_NAME 2> /dev/null)" == "" ]]; then
+    SHOULD_BUILD=true
+elif [[ "$SCRIPT_FILE" -nt "$(docker inspect -f '{{.Created}}' $IMAGE_NAME 2>/dev/null)" ]]; then
+    echo "Changes detected in $SCRIPT_FILE..."
+    SHOULD_BUILD=true
+fi
+
+if [ "$SHOULD_BUILD" = true ]; then
+    echo "Building slash..."
+    # Hide output unless there is an error
+    if ! docker build -t $IMAGE_NAME . > /tmp/slash_build.log 2>&1; then
+        echo "Build failed! Check /tmp/slash_build.log"
+        cat /tmp/slash_build.log
+        exit 1
+    fi
+    rm -f /tmp/slash_build.log
+fi
+
+# 3. ENVIRONMENT PREP
+# We pass terminal dimensions explicitly to help the container initialize faster.
+COLS=$(tput cols)
+LINES=$(tput lines)
+
+# 4. LAUNCH
+# exec replaces the shell process with docker to handle signals (Ctrl+C) better.
+exec docker run -it --rm \
+    -e TERM="$TERM" \
+    -e COLS="$COLS" \
+    -e LINES="$LINES" \
+    --name slash-game \
+    $IMAGE_NAME

@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+
+# --- 1. PRE-CACHE CODES (The "tput" way) ---
+# We query the terminfo database once and store the results in variables.
+# This prevents forking 1000s of processes during the animation.
+
+ALT_SCREEN_ON=$(tput smcup)
+ALT_SCREEN_OFF=$(tput rmcup)
+CURSOR_HIDE=$(tput civis)
+CURSOR_SHOW=$(tput cnorm)
+CLEAR=$(tput clear)
+RESET=$(tput sgr0)
+BOLD=$(tput bold)
+
+# Colors
+RED=$(tput setaf 1)
+GREEN=$(tput setaf 2)
+BLUE=$(tput setaf 4)
+YELLOW=$(tput setaf 3)
+
+# Function to move cursor: cup <row> <col>
+move_cursor() {
+    tput cup "$1" "$2"
+}
+
+# Cleanup function to ensure terminal is restored if user hits Ctrl+C
+cleanup() {
+    echo -ne "$ALT_SCREEN_OFF$CURSOR_SHOW"
+    exit
+}
+trap cleanup SIGINT SIGTERM
+
+# --- 2. START THE DEMO ---
+
+# Switch to alternate screen and hide cursor
+echo -ne "$ALT_SCREEN_ON$CURSOR_HIDE$CLEAR"
+
+# Get terminal dimensions
+ROWS=$(tput lines)
+COLS=$(tput cols)
+
+# Draw a static border
+for ((i=0; i<COLS; i++)); do
+    printf "\033[0;${i}H${BLUE}="
+    printf "\033[${ROWS};${i}H${BLUE}="
+done
+
+# --- 3. MAIN ANIMATION LOOP ---
+# Using printf with variables is much faster than calling tput inside the loop.
+
+count=0
+while [ $count -lt 50 ]; do
+    # Calculate random positions
+    R=$(( (RANDOM % (ROWS - 2)) + 1 ))
+    C=$(( (RANDOM % (COLS - 2)) + 1 ))
+    
+    # Random color selection
+    COLOR_VAR="COLOR$(( (RANDOM % 4) + 1 ))"
+    case $((RANDOM % 4)) in
+        0) COL=$RED ;;
+        1) COL=$GREEN ;;
+        2) COL=$BLUE ;;
+        3) COL=$YELLOW ;;
+    esac
+
+    # Move and print (Using raw ANSI-escaped variables for speed)
+    # Note: tput cup 0 0 is \033[1;1H. We use tput to get the logic, 
+    # but here we'll just use a fast printf.
+    tput cup $((ROWS / 2)) $(( (COLS / 2) - 10 ))
+    printf "${BOLD}${YELLOW}Frame: %02d / 50${RESET}" "$count"
+    
+    tput cup "$R" "$C"
+    printf "${COL}*${RESET}"
+
+    sleep 0.05
+    ((count++))
+done
+
+tput cup $((ROWS / 2 + 2)) $(( (COLS / 2) - 12 ))
+echo "${BOLD}${GREEN}Press any key to exit...${RESET}"
+
+# Wait for one character of input
+read -n 1
+
+# --- 4. EXIT & CLEANUP ---
+cleanup
