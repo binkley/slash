@@ -214,7 +214,16 @@ while (( HP > 0 )); do
     read -rsn1 -t 0.1 key
     [[ "$key" == $'\e' ]] && { read -rsn2 -t 0.01 e; case "$e" in '[A') k="w";; '[B') k="s";; '[C') k="d";; '[D') k="a";; esac; key=$k; }
     nx=$PX; ny=$PY
-    case "$key" in w) ((ny--));; s) ((ny++));; a) ((nx--));; d) ((nx++));; v) ((DEBUG = !DEBUG));; q) break;; *) continue;; esac
+    case "$key" in 
+        w) ((ny--));; 
+        s) ((ny++));; 
+        a) ((nx--));; 
+        d) ((nx++));; 
+        .) LOG="Waiting..."; move_enemies; continue;; # Rest command: update AI but don't change PX/PY
+        v) ((DEBUG = !DEBUG));; 
+        q) break;; 
+        *) continue;; 
+    esac
     if (( ny >= 0 && ny < MAP_H && nx >= 0 && nx < MAP_W )); then
         tile="${MAP_DATA[$ny]:$nx:1}"
         if [[ "$tile" == "+" ]]; then MAP_DATA[$ny]="${MAP_DATA[$ny]:0:$nx}/${MAP_DATA[$ny]:$((nx+1))}"; LOG="Opened door."; move_enemies; continue; fi
