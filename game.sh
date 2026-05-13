@@ -16,7 +16,7 @@ COL_STAIRS=$'\e[38;5;51m'
 # Game State
 BASE_VIEW=7; VIEW_DIST=7; SENSE_DIST=9
 MAX_HP=20; HP=20; GOLD=0; FLOOR=1; LEVEL=1; LOG="game.cfg loaded. Dungeon initialized."
-DEBUG=0; WEAPON="Fists"; ARMOR="Rags"; ATK=2; DEF=0
+LIGHT=100; DEBUG=0; WEAPON="Fists"; ARMOR="Rags"; ATK=2; DEF=0
 
 cleanup() { stty sane; echo -ne "$WRAP_ON$ALT_OFF$CUR_SHOW"; }
 trap cleanup EXIT SIGINT SIGTERM
@@ -136,7 +136,15 @@ render() {
     local frame=$'\e[H'
     local percent=$(( HP * 100 / MAX_HP ))
     local hp_col=$GREEN; (( percent <= 30 )) && hp_col=$RED; (( percent <= 70 && percent > 30 )) && hp_col=$YELLOW
-    VIEW_DIST=$(( BASE_VIEW + (RANDOM % 3) - 1 ))
+    
+    # Fuel/Light logic
+    if (( LIGHT > 0 )); then
+        VIEW_DIST=$(( BASE_VIEW + (RANDOM % 3) - 1 ))
+        local light_col=$YELLOW; (( LIGHT < 20 )) && light_col=$RED
+    else
+        VIEW_DIST=1
+        local light_col=$RED
+    fi
 
     for ((y=0; y<MAP_H; y++)); do
         local row="${MAP_DATA[$y]}"
@@ -154,11 +162,8 @@ render() {
                 local sym="${ENTITIES["$x,$y"]}"
                 if (( x == PX && y == PY )); then frame+="${COL_PLAYER}@${RESET}"
                 elif [[ -n "$sym" ]]; then
-                    if [[ "$sym" == "S" ]]; then 
-                        frame+="${COL_STAIRS}>${RESET}"
-                    else 
-                        frame+="${COLOR_DB[$sym]}$sym${RESET}"
-                    fi
+                    if [[ "$sym" == "S" ]]; then frame+="${COL_STAIRS}>${RESET}"
+                    else frame+="${COLOR_DB[$sym]}$sym${RESET}"; fi
                 elif [[ "${row:$x:1}" == "^" ]]; then frame+="${COL_LAVA}^${RESET}"
                 elif [[ "${row:$x:1}" == "+" ]]; then frame+="${COL_DOOR}+${RESET}"
                 elif [[ "${row:$x:1}" == "/" ]]; then frame+="${COL_DOOR}/${RESET}"
@@ -174,8 +179,8 @@ render() {
     done
     echo -ne "$frame"
     tput cup $((MAP_H)) 0
-    printf "${RESET}LVL: ${CYAN}$LEVEL${RESET} | HP: ${hp_col}$HP/$MAX_HP${RESET} | Gold: ${COL_GOLD}$GOLD${RESET} | Floor: ${BOLD}$FLOOR${RESET}\e[K\r\n"
-    printf "${RESET}Equip: ${CYAN}$WEAPON${RESET} / ${CYAN}$ARMOR${RESET}\e[K\r\n"
+    printf "${RESET}LVL: ${CYAN}$LEVEL${RESET} | HP: ${hp_col}$HP/$MAX_HP${RESET} | Fuel: ${light_col}$LIGHT${RESET} | Floor: ${BOLD}$FLOOR${RESET}\e[K\r\n"
+    printf "${RESET}Equip: ${CYAN}$WEAPON${RESET} / ${CYAN}$ARMOR${RESET} | Gold: ${COL_GOLD}$GOLD${RESET}\e[K\r\n"
     printf "${RESET}LOG: $LOG${RESET}\e[K"
 }
 
@@ -183,11 +188,16 @@ handle_move() {
     local nx=$1 ny=$2
     local sym="${ENTITIES["$nx,$ny"]}"
     local type="${TYPE_DB[$sym]}"
+    ((LIGHT--)) # Turn passed
     
     case "$type" in
         POT)
             local heal=${HP_DB[$sym]}; ((HP += heal)); ((HP > MAX_HP)) && HP=$MAX_HP
             LOG="${GREEN}Gulp! ${NAME_DB[$sym]}.${RESET}"; unset 'ENTITIES["'$nx,$ny'"]' ;;
+        TOR)
+            local t=${VAL_DB[$sym]}; ((LIGHT += t))
+            LOG="${YELLOW}You light a ${NAME_DB[$sym]} (+${t} turns).${RESET}"
+            unset 'ENTITIES["'$nx,$ny'"]' ;;
         WEP)
             ATK=${ATK_DB[$sym]}; WEAPON="${NAME_DB[$sym]}"; LOG="Found ${NAME_DB[$sym]}."; unset 'ENTITIES["'$nx,$ny'"]' ;;
         ARM)
@@ -209,30 +219,46 @@ handle_move() {
 stty raw -echo; echo -ne "$ALT_ON$WRAP_OFF$CUR_HIDE$CLR"
 load_entities
 generate_dungeon
+
+render # Initial Draw
+
 while (( HP > 0 )); do
-    render
-    read -rsn1 -t 0.1 key
-    [[ "$key" == $'\e' ]] && { read -rsn2 -t 0.01 e; case "$e" in '[A') k="w";; '[B') k="s";; '[C') k="d";; '[D') k="a";; esac; key=$k; }
+    read -rsn1 key
+    if [[ "$key" == $'\e' ]]; then
+        read -rsn2 -t 0.01 e
+        case "$e" in '[A') key="w";; '[B') key="s";; '[C') key="d";; '[D') key="a";; esac
+    fi
+
+    processed=0
     nx=$PX; ny=$PY
+    
     case "$key" in 
-        w) ((ny--));; 
-        s) ((ny++));; 
-        a) ((nx--));; 
-        d) ((nx++));; 
-        .) LOG="Waiting..."; move_enemies; continue;; # Rest command: update AI but don't change PX/PY
-        v) ((DEBUG = !DEBUG));; 
+        w) ((ny--)); processed=1;; 
+        s) ((ny++)); processed=1;; 
+        a) ((nx--)); processed=1;; 
+        d) ((nx++)); processed=1;; 
+        .) LOG="Waiting..."; move_enemies; ((LIGHT--)); processed=1;; 
+        v) ((DEBUG = !DEBUG)); processed=1;; 
         q) break;; 
-        *) continue;; 
     esac
-    if (( ny >= 0 && ny < MAP_H && nx >= 0 && nx < MAP_W )); then
-        tile="${MAP_DATA[$ny]:$nx:1}"
-        if [[ "$tile" == "+" ]]; then MAP_DATA[$ny]="${MAP_DATA[$ny]:0:$nx}/${MAP_DATA[$ny]:$((nx+1))}"; LOG="Opened door."; move_enemies; continue; fi
-        if [[ "$tile" != "#" ]]; then
-            handle_move $nx $ny
-            if [[ "$tile" == "^" ]]; then flash_red; ((HP-=2)); LOG="${RED}Lava burns!${RESET}"; fi
-            if [[ ${TRAPS["$PX,$PY"]} == 1 ]]; then flash_red; ((HP-=5)); TRAPS["$PX,$PY"]=2; LOG="${RED}TRAP!${RESET}"; fi
-            move_enemies
+
+    if [[ $processed -eq 1 ]]; then
+        if [[ "$key" != "." && "$key" != "v" ]]; then
+            if (( ny >= 0 && ny < MAP_H && nx >= 0 && nx < MAP_W )); then
+                tile="${MAP_DATA[$ny]:$nx:1}"
+                if [[ "$tile" == "+" ]]; then 
+                    MAP_DATA[$ny]="${MAP_DATA[$ny]:0:$nx}/${MAP_DATA[$ny]:$((nx+1))}"
+                    LOG="Opened door."
+                    move_enemies; ((LIGHT--))
+                elif [[ "$tile" != "#" ]]; then
+                    handle_move $nx $ny
+                    if [[ "$tile" == "^" ]]; then flash_red; ((HP-=2)); LOG="${RED}Lava burns!${RESET}"; fi
+                    if [[ ${TRAPS["$PX,$PY"]} == 1 ]]; then flash_red; ((HP-=5)); TRAPS["$PX,$PY"]=2; LOG="${RED}TRAP!${RESET}"; fi
+                    move_enemies
+                fi
+            fi
         fi
+        render
     fi
 done
 cleanup
