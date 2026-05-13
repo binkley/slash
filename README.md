@@ -4,10 +4,13 @@ A data-driven terminal roguelike engine written in Bash.
 
 ## Quick Start
 
+Try `./slash`. This runs:
+
 1. **Build:** `docker build -t slash .`
 2. **Play:** `docker run -it --rm slash`
 
 ## The Vibe
+
 slash is designed for **vibe coding**. All game balance lives in `game.cfg`.
 You can add new monsters, items, and weapons without writing a single line of
 code.
@@ -24,8 +27,10 @@ The file follows this column order:
 * **VALUE:** Max gold drop.
 
 ## TODO List
-- [ ] **Unicode Upgrades:** Swap ASCII for Bold/Unicode icons (👤, 🧪, 🧱).
-- [ ] **Monster HP System:** Make enemies take multiple hits based on their `HP` stat.
-- [ ] **Experience (XP):** Gain levels and permanent stat boosts through combat.
-- [ ] **Identify Mechanics:** Hide item stats until they are used or identified.
-- [ ] **Complex Hazards:** Add pit traps, slippery ice, or vision-blocking fog.
+
+- [ ] **Monster HP System:** Make enemies take multiple hits based on their
+  `HP` stat.
+- [ ] **Experience (XP):** Gain levels and permanent stat boosts through
+  combat.
+- [ ] **Identify Mechanics:** Hide item stats until they are used or
+  identified.
