@@ -264,7 +264,7 @@ expected_grid="$(cat <<'EOF'
 #.......>#
 #######   
 LVL: 1 | HP: 20/20 | Fuel: 100 | AC: 0 (0t)
-Equip: Fists / Rags | Gold: 0
+Equip: Fists / Rags | Gold: 0 | [ESC/?] Help
 LOG: Ready.
 EOF
 )"
@@ -337,14 +337,64 @@ e2e_out="$(
             VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
             PX=2; PY=1
         }
-        # Send: Right arrow (\e[C) into closed door (+), "." to wait, "v" for debug, "q" to quit
-        printf "\e[C.vq" | run_game
+        # Send: Right arrow (\e[C) into closed door (+), "." to wait, "v" for debug, "Q" to quit
+        printf "\e[C.vQ" | run_game
     '
 )"
 plain_e2e="$(strip_ansi "$e2e_out")"
 assert_contains "$plain_e2e" "#.@/...#" "E2E loop translates arrow key escape sequence and opens '+' door to '/'"
 assert_contains "$plain_e2e" "LOG: Waiting..." "E2E loop processes '.' wait command and updates HUD log"
 assert_contains "$plain_e2e" "Fuel: 98" "E2E loop decrements torch fuel on door open and wait actions"
+
+# Context-sensitive <ESC>, Help menu, quit confirmation, and Ctrl-C (\x03)
+e2e_modal_out="$(
+    bash -c '
+        source "'"$SCRIPT_DIR"'/game.sh"
+        flash_red() { :; }
+        load_entities
+        generate_dungeon() {
+            MAP_W=8; MAP_H=4; FLICKER=0
+            MAP_DATA=("########" "#......#" "#......#" "########")
+            VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
+            PX=2; PY=1
+        }
+        # 1. Bare ESC opens Help overlay
+        # 2. Second ESC closes Help overlay ("Resumed.")
+        # 3. "q" opens quit confirmation ("Really quit?")
+        # 4. ESC cancels quit confirmation ("Resumed.")
+        # 5. Ctrl-C (\x03) exits cleanly
+        printf "\e\eq\e\x03" | run_game
+    '
+)"
+plain_modal="$(strip_ansi "$e2e_modal_out")"
+assert_contains "$plain_modal" "+------------ SLASH HELP ------------+" "Bare ESC in normal mode opens the SLASH HELP overlay"
+assert_contains "$plain_modal" "LOG: Really quit? [y/q] Yes  [n/ESC] Cancel" "Pressing 'q' in normal mode prompts for quit confirmation"
+assert_contains "$plain_modal" "LOG: Resumed." "Pressing ESC cancels an active Help modal or quit prompt"
+
+e2e_help_quit="$(
+    bash -c '
+        source "'"$SCRIPT_DIR"'/game.sh"
+        flash_red() { :; }
+        load_entities
+        generate_dungeon() {
+            MAP_W=8; MAP_H=4; FLICKER=0
+            MAP_DATA=("########" "#......#" "#......#" "########")
+            VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
+            PX=2; PY=1
+        }
+        # Open Help with "?" then press "q" to quit immediately, ignoring trailing "." wait
+        printf "?q." | run_game
+    '
+)"
+plain_help_quit="$(strip_ansi "$e2e_help_quit")"
+assert_contains "$plain_help_quit" "HELP: [q] Quit  [ESC/?/Space] Resume" "Pressing '?' opens the Help overlay"
+if [[ "$plain_help_quit" != *"LOG: Waiting..."* ]]; then
+    ((PASS += 1))
+    printf '  \e[32m✓\e[0m %s\n' "Pressing 'q' inside Help menu exits immediately without processing trailing keys"
+else
+    ((FAIL += 1))
+    printf '  \e[31m✗\e[0m %s\n' "Pressing 'q' inside Help menu exits immediately without processing trailing keys"
+fi
 
 echo ""
 printf 'Summary: \e[32m%d passed\e[0m, \e[31m%d failed\e[0m\n' "$PASS" "$FAIL"

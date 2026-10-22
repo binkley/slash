@@ -17,7 +17,7 @@ COL_STAIRS=$'\e[38;5;51m'; COL_GOLD=$'\e[38;5;220m'
 BASE_VIEW=7; VIEW_DIST=7; SENSE_DIST=9
 MAX_HP=20; HP=20; GOLD=0; FLOOR=1; LEVEL=1; LOG="game.cfg loaded."
 LIGHT=100; DEBUG=0; WEAPON="Fists"; ARMOR="Rags"; ATK=2; DEF=0
-AC_BOOST=0; AC_TIMER=0
+AC_BOOST=0; AC_TIMER=0; UI_MODE=""
 
 cleanup() { stty sane 2>/dev/null; echo -ne "$WRAP_ON$ALT_OFF$CUR_SHOW"; }
 MAP_W=$(tput cols 2>/dev/null || echo 80); MAP_H=$(( $(tput lines 2>/dev/null || echo 24) - 5 ))
@@ -175,11 +175,34 @@ render() {
         frame+=$'\r\n'
     done
     echo -ne "$frame"
+    [[ "${UI_MODE:-}" == "help" ]] && render_help
     printf '\e[%d;1H' $((MAP_H + 1))
     local total_def=$(( DEF + AC_BOOST ))
     printf "${RESET}LVL: ${CYAN}$LEVEL${RESET} | HP: ${hp_col}$HP/$MAX_HP${RESET} | Fuel: ${light_col}$LIGHT${RESET} | AC: ${CYAN}$total_def${RESET} (${AC_TIMER}t)\e[K\r\n"
-    printf "${RESET}Equip: ${CYAN}$WEAPON${RESET} / ${CYAN}$ARMOR${RESET} | Gold: ${COL_GOLD}$GOLD${RESET}\e[K\r\n"
+    printf "${RESET}Equip: ${CYAN}$WEAPON${RESET} / ${CYAN}$ARMOR${RESET} | Gold: ${COL_GOLD}$GOLD${RESET} | [ESC/?] Help\e[K\r\n"
     printf "${RESET}LOG: $LOG${RESET}\e[K"
+}
+
+render_help() {
+    local lines=(
+        "+------------ SLASH HELP ------------+"
+        "| Move / Attack : w a s d or Arrows  |"
+        "| Open Door     : Bump into +        |"
+        "| Wait 1 Turn   : .                  |"
+        "| Toggle Debug  : v                  |"
+        "| Quit Game     : q (or Q immediate) |"
+        "| Close Help    : ESC / ? / Space    |"
+        "+------------------------------------+"
+    )
+    local box_h=${#lines[@]} box_w=${#lines[0]}
+    local start_y=$(( (MAP_H - box_h) / 2 + 1 ))
+    local start_x=$(( (MAP_W - box_w) / 2 + 1 ))
+    (( start_y < 1 )) && start_y=1
+    (( start_x < 1 )) && start_x=1
+    local i
+    for ((i=0; i<box_h; i++)); do
+        printf '\e[%d;%dH%s%s%s' $((start_y + i)) "$start_x" "$CYAN" "${lines[$i]}" "$RESET"
+    done
 }
 
 handle_move() {
@@ -225,13 +248,60 @@ handle_move() {
 
 # --- 7. MAIN ---
 run_game() {
-    trap cleanup EXIT SIGINT SIGTERM
+    trap cleanup EXIT
+    trap 'cleanup; exit 130' SIGINT SIGTERM
     stty raw -echo 2>/dev/null; echo -ne "$ALT_ON$WRAP_OFF$CUR_HIDE$CLR"; load_entities; generate_dungeon; render
+    local next_key="" e1="" e2=""
     while (( HP > 0 )); do
-        read -rsn1 key || break
-        [[ "$key" == $'\e' ]] && { read -rsn2 -t 0.01 e; case "$e" in '[A') key="w";; '[B') key="s";; '[C') key="d";; '[D') key="a";; esac; }
+        if [[ -n "$next_key" ]]; then
+            key="$next_key"; next_key=""
+        else
+            read -rsn1 key || break
+        fi
+        [[ "$key" == $'\x03' ]] && break
+        if [[ "$key" == $'\e' ]]; then
+            e1=""
+            read -rsn1 -t 0.01 e1 || true
+            if [[ "$e1" == "[" ]]; then
+                e2=""
+                read -rsn1 -t 0.01 e2 || true
+                case "$e2" in
+                    A) key="w" ;;
+                    B) key="s" ;;
+                    C) key="d" ;;
+                    D) key="a" ;;
+                    *) continue ;;
+                esac
+            else
+                next_key="$e1"
+                key="ESC"
+            fi
+        fi
+        if [[ "$UI_MODE" == "confirm_quit" ]]; then
+            case "$key" in
+                y|Y|q|Q) break ;;
+                ESC|n|N|' ') UI_MODE=""; LOG="Resumed."; render ;;
+            esac
+            continue
+        elif [[ "$UI_MODE" == "help" ]]; then
+            case "$key" in
+                q|Q) break ;;
+                ESC|'?'|' ') UI_MODE=""; LOG="Resumed."; render ;;
+            esac
+            continue
+        fi
         processed=0; nx=$PX; ny=$PY
-        case "$key" in w) ((ny--)); processed=1;; s) ((ny++)); processed=1;; a) ((nx--)); processed=1;; d) ((nx++)); processed=1;; .) LOG="Waiting..."; move_enemies; ((LIGHT--)); processed=1;; v) ((DEBUG = !DEBUG)); processed=1;; q) break;; esac
+        case "$key" in
+            w) ((ny--)); processed=1 ;;
+            s) ((ny++)); processed=1 ;;
+            a) ((nx--)); processed=1 ;;
+            d) ((nx++)); processed=1 ;;
+            .) LOG="Waiting..."; move_enemies; ((LIGHT--)); processed=1 ;;
+            v) ((DEBUG = !DEBUG)); processed=1 ;;
+            ESC|'?') UI_MODE="help"; LOG="HELP: [q] Quit  [ESC/?/Space] Resume"; render; continue ;;
+            q) UI_MODE="confirm_quit"; LOG="${YELLOW}Really quit? [y/q] Yes  [n/ESC] Cancel${RESET}"; render; continue ;;
+            Q) break ;;
+        esac
         if [[ $processed -eq 1 ]]; then
             if [[ "$key" != "." && "$key" != "v" ]]; then
                 if (( ny >= 0 && ny < MAP_H && nx >= 0 && nx < MAP_W )); then

@@ -30,7 +30,10 @@ To run directly on the host (requires Bash 4+):
 | :--- | :--- |
 | `w` `a` `s` `d` / Arrow Keys | Move, bump-attack monsters, or open closed doors (`+`) |
 | `.` | Wait a turn |
-| `q` | Quit |
+| `ESC` / `?` | Open Help menu (or cancel an active prompt/modal) |
+| `q` | Quit (prompts for confirmation, or quits immediately from Help) |
+| `Q` / `Ctrl-C` | Quit immediately |
+| `v` | Toggle debug visibility |
 
 ### Map Symbols & Hazards
 
