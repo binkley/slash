@@ -15,42 +15,42 @@ COL_STAIRS=$'\e[38;5;51m'
 
 # Game State
 BASE_VIEW=7; VIEW_DIST=7; SENSE_DIST=9
-MAX_HP=20; HP=20; GOLD=0; FLOOR=1; LEVEL=1; LOG="game.cfg loaded. Dungeon initialized."
+MAX_HP=20; HP=20; GOLD=0; FLOOR=1; LEVEL=1; LOG="game.cfg loaded."
 LIGHT=100; DEBUG=0; WEAPON="Fists"; ARMOR="Rags"; ATK=2; DEF=0
+AC_BOOST=0; AC_TIMER=0
 
 cleanup() { stty sane; echo -ne "$WRAP_ON$ALT_OFF$CUR_SHOW"; }
 trap cleanup EXIT SIGINT SIGTERM
-
 MAP_W=$(tput cols); MAP_H=$(($(tput lines) - 5))
 
 # --- 2. DATA LOADER ---
-declare -A TYPE_DB; declare -A COLOR_DB; declare -A NAME_DB
-declare -A HP_DB;   declare -A DMG_DB;   declare -A ATK_DB
-declare -A AC_DB;   declare -A VAL_DB
+declare -A TYPE_DB COLOR_DB NAME_DB HP_DB DMG_DB ATK_DB AC_DB VAL_DB
 SPAWN_POOL=()
 
 load_entities() {
     local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local cfg="$script_dir/game.cfg"
     [[ ! -f "$cfg" ]] && cfg="game.cfg"
-
-    if [[ ! -f "$cfg" ]]; then
-        cleanup; echo "Error: game.cfg not found!"; exit 1
-    fi
-
+    if [[ ! -f "$cfg" ]]; then cleanup; echo "Error: game.cfg not found!"; exit 1; fi
     while IFS='|' read -r type sym col name hp dmg atk ac val; do
         [[ "$type" =~ ^# || -z "$type" ]] && continue
         type=$(echo "$type" | xargs); sym=$(echo "$sym" | xargs); name=$(echo "$name" | xargs)
         col=$(echo "$col" | xargs); hp=$(echo "$hp" | xargs); dmg=$(echo "$dmg" | xargs)
         atk=$(echo "$atk" | xargs); ac=$(echo "$ac" | xargs); val=$(echo "$val" | xargs)
-
-        TYPE_DB["$sym"]="$type"
-        NAME_DB["$sym"]="$name"
-        COLOR_DB["$sym"]="\e[38;5;${col}m"
-        HP_DB["$sym"]="${hp//-/0}"; DMG_DB["$sym"]="${dmg//-/0}"
-        ATK_DB["$sym"]="${atk//-/0}"; AC_DB["$sym"]="${ac//-/0}"
-        VAL_DB["$sym"]="${val//-/0}"
-        [[ "$type" != "GOL" && "$sym" != "S" ]] && SPAWN_POOL+=("$sym")
+        
+        # Associative arrays in Bash 4+ can't use '!' as a key easily without care
+        # We'll use a compound key [sym_color] to allow identical symbols with different colors
+        local key="${sym}_${col}"
+        TYPE_DB["$key"]="$type"
+        NAME_DB["$key"]="$name"
+        COLOR_DB["$key"]="\e[38;5;${col}m"
+        HP_DB["$key"]="${hp//-/0}"
+        DMG_DB["$key"]="${dmg//-/0}"
+        ATK_DB["$key"]="${atk//-/0}"
+        AC_DB["$key"]="${ac//-/0}"
+        VAL_DB["$key"]="${val//-/0}"
+        
+        [[ "$type" != "GOL" && "$sym" != "S" ]] && SPAWN_POOL+=("$key")
     done < "$cfg"
 }
 
@@ -58,40 +58,35 @@ load_entities() {
 flash_red() { echo -ne "\e[H\e[48;5;52m\e[J"; sleep 0.03; echo -ne "${RESET}\e[H\e[J"; }
 
 # --- 4. ENGINE CORE ---
-declare -A VISITED; declare -A ENTITIES; declare -A TRAPS
+declare -A VISITED ENTITIES TRAPS CUR_MON_HP
 
 generate_dungeon() {
-    MAP_DATA=(); VISITED=(); ENTITIES=(); TRAPS=()
+    MAP_DATA=(); VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
     local wall_row=$(printf "%${MAP_W}s" | tr ' ' '#')
     for ((y=0; y<MAP_H; y++)); do MAP_DATA[$y]="$wall_row"; done
-    
     local tx=$((MAP_W / 2)) ty=$((MAP_H / 2))
     local steps=0 max=$(( (MAP_W * MAP_H) / 3 )) 
     PX=$tx; PY=$ty
-
     while (( steps < max )); do
         if [[ "${MAP_DATA[$ty]:$tx:1}" == "#" ]]; then
             MAP_DATA[$ty]="${MAP_DATA[$ty]:0:$tx}.${MAP_DATA[$ty]:$((tx+1))}"
             ((steps++))
-            
             local r=$((RANDOM % 100))
             if (( r < 3 )); then 
-                local choice=${SPAWN_POOL[$RANDOM % ${#SPAWN_POOL[@]}]}
-                [[ -n "$choice" ]] && ENTITIES["$tx,$ty"]="$choice"
+                local choice="${SPAWN_POOL[$RANDOM % ${#SPAWN_POOL[@]}]}"
+                if [[ -n "$choice" ]]; then
+                    ENTITIES["$tx,$ty"]="$choice"
+                    # choice is sym_col, so we extract type check via key
+                    [[ "${TYPE_DB["$choice"]}" == "MON" ]] && CUR_MON_HP["$tx,$ty"]="${HP_DB["$choice"]}"
+                fi
             elif (( r < 4 )); then MAP_DATA[$ty]="${MAP_DATA[$ty]:0:$tx}^${MAP_DATA[$ty]:$((tx+1))}"
             elif (( r < 5 )); then TRAPS["$tx,$ty"]=1
             elif (( r < 6 )); then MAP_DATA[$ty]="${MAP_DATA[$ty]:0:$tx}+${MAP_DATA[$ty]:$((tx+1))}"
             fi
         fi
-        
-        case $((RANDOM % 4)) in 
-            0) ((ty > 1)) && ((ty--)) ;; 
-            1) ((ty < MAP_H-2)) && ((ty++)) ;; 
-            2) ((tx > 1)) && ((tx--)) ;; 
-            3) ((tx < MAP_W-2)) && ((tx++)) ;; 
-        esac
+        case $((RANDOM % 4)) in 0) ((ty > 1)) && ((ty--)) ;; 1) ((ty < MAP_H-2)) && ((ty++)) ;; 2) ((tx > 1)) && ((tx--)) ;; 3) ((tx < MAP_W-2)) && ((tx++)) ;; esac
     done
-    ENTITIES["$tx,$ty"]="S" 
+    ENTITIES["$tx,$ty"]="S_stairs" # Special key for stairs
 }
 
 can_see() {
@@ -111,59 +106,58 @@ can_see() {
 }
 
 move_enemies() {
-    local -A NEW_ENTITIES
+    local -A NEW_ENTITIES; local -A NEW_MON_HP
+    (( AC_TIMER > 0 )) && (( AC_TIMER-- ))
+    [[ $AC_TIMER -eq 0 ]] && AC_BOOST=0
+
     for pos in "${!ENTITIES[@]}"; do
-        local sym="${ENTITIES[$pos]}"
-        if [[ "${TYPE_DB[$sym]}" == "MON" ]]; then
+        local key="${ENTITIES["$pos"]}"
+        if [[ "${TYPE_DB["$key"]}" == "MON" ]]; then
             local ex=${pos%,*} ey=${pos#*,}
             local dx=$(( PX - ex )) dy=$(( PY - ey ))
-            local dist_sq=$(( dx*dx + dy*dy ))
-            if (( dist_sq < SENSE_DIST * SENSE_DIST && dist_sq > 0 )); then
+            local abs_dx=${dx#-}; local abs_dy=${dy#-}
+            
+            local total_def=$(( DEF + AC_BOOST ))
+
+            if (( abs_dx <= 1 && abs_dy <= 1 )); then
+                local edmg=$(( DMG_DB["$key"] - total_def ))
+                (( edmg < 0 )) && edmg=0
+                (( edmg > 0 )) && flash_red; ((HP -= edmg))
+                LOG="${RED}${NAME_DB["$key"]} hits you for $edmg dmg!${RESET}"
+                NEW_ENTITIES["$pos"]="$key"; NEW_MON_HP["$pos"]="${CUR_MON_HP["$pos"]}"
+            elif (( abs_dx*abs_dx + abs_dy*abs_dy < SENSE_DIST * SENSE_DIST )); then
                 local nx=$ex ny=$ey
-                if (( ${dx#-} > ${dy#-} )); then (( dx > 0 )) && ((nx++)) || ((nx--))
+                if (( abs_dx > abs_dy )); then (( dx > 0 )) && ((nx++)) || ((nx--))
                 else (( dy > 0 )) && ((ny++)) || ((ny--)); fi
                 local target_tile="${MAP_DATA[$ny]:$nx:1}"
                 if [[ "$target_tile" == "." || "$target_tile" == "/" ]] && [[ -z "${NEW_ENTITIES["$nx,$ny"]}" && -z "${ENTITIES["$nx,$ny"]}" ]]; then
-                    NEW_ENTITIES["$nx,$ny"]="$sym"
-                else NEW_ENTITIES["$pos"]="$sym"; fi
-            else NEW_ENTITIES["$pos"]="$sym"; fi
-        else NEW_ENTITIES["$pos"]="$sym"; fi
+                    NEW_ENTITIES["$nx,$ny"]="$key"; NEW_MON_HP["$nx,$ny"]="${CUR_MON_HP["$pos"]}"
+                else NEW_ENTITIES["$pos"]="$key"; NEW_MON_HP["$pos"]="${CUR_MON_HP["$pos"]}"; fi
+            else NEW_ENTITIES["$pos"]="$key"; NEW_MON_HP["$pos"]="${CUR_MON_HP["$pos"]}"; fi
+        else NEW_ENTITIES["$pos"]="$key"; fi
     done
-    ENTITIES=(); for pos in "${!NEW_ENTITIES[@]}"; do ENTITIES["$pos"]="${NEW_ENTITIES[$pos]}"; done
+    ENTITIES=(); CUR_MON_HP=(); for pos in "${!NEW_ENTITIES[@]}"; do ENTITIES["$pos"]="${NEW_ENTITIES["$pos"]}"; [[ -n "${NEW_MON_HP["$pos"]}" ]] && CUR_MON_HP["$pos"]="${NEW_MON_HP["$pos"]}"; done
 }
 
 render() {
-    local frame=$'\e[H'
-    local percent=$(( HP * 100 / MAX_HP ))
+    local frame=$'\e[H'; local percent=$(( HP * 100 / MAX_HP ))
     local hp_col=$GREEN; (( percent <= 30 )) && hp_col=$RED; (( percent <= 70 && percent > 30 )) && hp_col=$YELLOW
-    
-    # Fuel/Light logic
-    if (( LIGHT > 0 )); then
-        VIEW_DIST=$(( BASE_VIEW + (RANDOM % 3) - 1 ))
-        local light_col=$YELLOW; (( LIGHT < 20 )) && light_col=$RED
-    else
-        VIEW_DIST=1
-        local light_col=$RED
-    fi
-
+    if (( LIGHT > 0 )); then VIEW_DIST=$(( BASE_VIEW + (RANDOM % 3) - 1 )); local light_col=$YELLOW; (( LIGHT < 20 )) && light_col=$RED
+    else VIEW_DIST=1; local light_col=$RED; fi
     for ((y=0; y<MAP_H; y++)); do
         local row="${MAP_DATA[$y]}"
         for ((x=0; x<MAP_W; x++)); do
             if [[ $DEBUG -eq 0 ]] && (( percent <= 30 )); then
                 if (( x == 0 || x == MAP_W - 1 || y == 0 || y == MAP_H - 1 )); then frame+="${RED}!${RESET}"; continue; fi
             fi
-            local dx=$((x-PX)) dy=$((y-PY))
-            local dist_sq=$((dx*dx + dy*dy))
-            local visible=0
+            local dx=$((x-PX)) dy=$((y-PY)); local dist_sq=$((dx*dx + dy*dy)); local visible=0
             if (( DEBUG == 1 )); then visible=1; elif (( dist_sq <= VIEW_DIST * VIEW_DIST )); then can_see $x $y && visible=1; fi
-
             if (( visible == 1 )); then
-                VISITED["$x,$y"]=1
-                local sym="${ENTITIES["$x,$y"]}"
+                VISITED["$x,$y"]=1; local key="${ENTITIES["$x,$y"]}"
                 if (( x == PX && y == PY )); then frame+="${COL_PLAYER}@${RESET}"
-                elif [[ -n "$sym" ]]; then
-                    if [[ "$sym" == "S" ]]; then frame+="${COL_STAIRS}>${RESET}"
-                    else frame+="${COLOR_DB[$sym]}$sym${RESET}"; fi
+                elif [[ -n "$key" ]]; then
+                    if [[ "$key" == "S_stairs" ]]; then frame+="${COL_STAIRS}>${RESET}"
+                    else frame+="${COLOR_DB["$key"]}${key%_*}${RESET}"; fi
                 elif [[ "${row:$x:1}" == "^" ]]; then frame+="${COL_LAVA}^${RESET}"
                 elif [[ "${row:$x:1}" == "+" ]]; then frame+="${COL_DOOR}+${RESET}"
                 elif [[ "${row:$x:1}" == "/" ]]; then frame+="${COL_DOOR}/${RESET}"
@@ -179,83 +173,64 @@ render() {
     done
     echo -ne "$frame"
     tput cup $((MAP_H)) 0
-    printf "${RESET}LVL: ${CYAN}$LEVEL${RESET} | HP: ${hp_col}$HP/$MAX_HP${RESET} | Fuel: ${light_col}$LIGHT${RESET} | Floor: ${BOLD}$FLOOR${RESET}\e[K\r\n"
+    local total_def=$(( DEF + AC_BOOST ))
+    printf "${RESET}LVL: ${CYAN}$LEVEL${RESET} | HP: ${hp_col}$HP/$MAX_HP${RESET} | Fuel: ${light_col}$LIGHT${RESET} | AC: ${CYAN}$total_def${RESET} ($( ((AC_TIMER)) )t)\e[K\r\n"
     printf "${RESET}Equip: ${CYAN}$WEAPON${RESET} / ${CYAN}$ARMOR${RESET} | Gold: ${COL_GOLD}$GOLD${RESET}\e[K\r\n"
     printf "${RESET}LOG: $LOG${RESET}\e[K"
 }
 
 handle_move() {
-    local nx=$1 ny=$2
-    local sym="${ENTITIES["$nx,$ny"]}"
-    local type="${TYPE_DB[$sym]}"
-    ((LIGHT--)) # Turn passed
-    
+    local nx=$1 ny=$2; local key="${ENTITIES["$nx,$ny"]}"; local type="${TYPE_DB["$key"]}"; ((LIGHT--))
     case "$type" in
-        POT)
-            local heal=${HP_DB[$sym]}; ((HP += heal)); ((HP > MAX_HP)) && HP=$MAX_HP
-            LOG="${GREEN}Gulp! ${NAME_DB[$sym]}.${RESET}"; unset 'ENTITIES["'$nx,$ny'"]' ;;
-        TOR)
-            local t=${VAL_DB[$sym]}; ((LIGHT += t))
-            LOG="${YELLOW}You light a ${NAME_DB[$sym]} (+${t} turns).${RESET}"
+        POT) 
+            local heal=${HP_DB["$key"]}
+            local acb=${AC_DB["$key"]}
+            if (( heal > 0 )); then
+                ((HP += heal)); ((HP > MAX_HP)) && HP=$MAX_HP
+                LOG="${GREEN}Gulp! ${NAME_DB["$key"]}.${RESET}"
+            elif (( acb > 0 )); then
+                AC_BOOST=$acb; AC_TIMER=${VAL_DB["$key"]}
+                LOG="${CYAN}You feel protected! ${NAME_DB["$key"]} used.${RESET}"
+            fi
             unset 'ENTITIES["'$nx,$ny'"]' ;;
-        WEP)
-            ATK=${ATK_DB[$sym]}; WEAPON="${NAME_DB[$sym]}"; LOG="Found ${NAME_DB[$sym]}."; unset 'ENTITIES["'$nx,$ny'"]' ;;
-        ARM)
-            DEF=${AC_DB[$sym]}; ARMOR="${NAME_DB[$sym]}"; LOG="Wore ${NAME_DB[$sym]}."; unset 'ENTITIES["'$nx,$ny'"]' ;;
+        TOR) ((LIGHT += VAL_DB["$key"])); LOG="${YELLOW}You light a ${NAME_DB["$key"]} (+${VAL_DB["$key"]} turns).${RESET}"; unset 'ENTITIES["'$nx,$ny'"]' ;;
+        WEP) ATK=${ATK_DB["$key"]}; WEAPON="${NAME_DB["$key"]}"; LOG="Found ${NAME_DB["$key"]}."; unset 'ENTITIES["'$nx,$ny'"]' ;;
+        ARM) DEF=${AC_DB["$key"]}; ARMOR="${NAME_DB["$key"]}"; LOG="Wore ${NAME_DB["$key"]}."; unset 'ENTITIES["'$nx,$ny'"]' ;;
         MON)
-            local edmg=$(( DMG_DB[$sym] - DEF )); (( edmg < 0 )) && edmg=0
-            (( edmg > 0 )) && flash_red
-            ((HP -= edmg)); LOG="Fight! ${NAME_DB[$sym]} did $edmg dmg."; unset 'ENTITIES["'$nx,$ny'"]'; return 0 ;;
-        GOL)
-            local g=$(( RANDOM % VAL_DB[$sym] + 1 )); ((GOLD += g)); LOG="Found $g gold nuggets."; unset 'ENTITIES["'$nx,$ny'"]' ;;
+            local total_def=$(( DEF + AC_BOOST ))
+            local edmg=$(( DMG_DB["$key"] - total_def )); (( edmg < 0 )) && edmg=0
+            (( edmg > 0 )) && flash_red; ((HP -= edmg))
+            local base_pdmg=$(( ATK + (RANDOM % 3) ))
+            local mac=${AC_DB["$key"]}
+            local final_pdmg=$(( base_pdmg - mac ))
+            (( final_pdmg < 0 )) && final_pdmg=0
+            (( CUR_MON_HP["$nx,$ny"] -= final_pdmg ))
+            if (( CUR_MON_HP["$nx,$ny"] <= 0 )); then
+                LOG="Killed ${NAME_DB["$key"]}! Final blow dealt $final_pdmg dmg."
+                unset 'ENTITIES["'$nx,$ny'"]'; unset 'CUR_MON_HP["'$nx,$ny'"]'
+            else
+                LOG="Hit ${NAME_DB["$key"]} for $final_pdmg ($base_pdmg-$mac AC). HP: ${CUR_MON_HP["$nx,$ny"]}. It hit you for $edmg!"
+            fi
+            return 0 ;;
+        GOL) local g=$(( RANDOM % VAL_DB["$key"] + 1 )); ((GOLD += g)); LOG="Found $g gold nuggets."; unset 'ENTITIES["'$nx,$ny'"]' ;;
     esac
-
-    [[ "$sym" == "S" ]] && { ((LEVEL++)); ((FLOOR++)); ((MAX_HP+=5)); HP=$MAX_HP; LOG="Deeper..."; generate_dungeon; echo -ne "$CLR"; return 1; }
-    
+    [[ "$key" == "S_stairs" ]] && { ((LEVEL++)); ((FLOOR++)); ((MAX_HP+=5)); HP=$MAX_HP; LOG="Deeper..."; generate_dungeon; echo -ne "$CLR"; return 1; }
     PX=$nx; PY=$ny
 }
 
 # --- 7. MAIN ---
-stty raw -echo; echo -ne "$ALT_ON$WRAP_OFF$CUR_HIDE$CLR"
-load_entities
-generate_dungeon
-
-render # Initial Draw
-
+stty raw -echo; echo -ne "$ALT_ON$WRAP_OFF$CUR_HIDE$CLR"; load_entities; generate_dungeon; render
 while (( HP > 0 )); do
     read -rsn1 key
-    if [[ "$key" == $'\e' ]]; then
-        read -rsn2 -t 0.01 e
-        case "$e" in '[A') key="w";; '[B') key="s";; '[C') key="d";; '[D') key="a";; esac
-    fi
-
-    processed=0
-    nx=$PX; ny=$PY
-    
-    case "$key" in 
-        w) ((ny--)); processed=1;; 
-        s) ((ny++)); processed=1;; 
-        a) ((nx--)); processed=1;; 
-        d) ((nx++)); processed=1;; 
-        .) LOG="Waiting..."; move_enemies; ((LIGHT--)); processed=1;; 
-        v) ((DEBUG = !DEBUG)); processed=1;; 
-        q) break;; 
-    esac
-
+    [[ "$key" == $'\e' ]] && { read -rsn2 -t 0.01 e; case "$e" in '[A') key="w";; '[B') key="s";; '[C') key="d";; '[D') key="a";; esac; }
+    processed=0; nx=$PX; ny=$PY
+    case "$key" in w) ((ny--)); processed=1;; s) ((ny++)); processed=1;; a) ((nx--)); processed=1;; d) ((nx++)); processed=1;; .) LOG="Waiting..."; move_enemies; ((LIGHT--)); processed=1;; v) ((DEBUG = !DEBUG)); processed=1;; q) break;; esac
     if [[ $processed -eq 1 ]]; then
         if [[ "$key" != "." && "$key" != "v" ]]; then
             if (( ny >= 0 && ny < MAP_H && nx >= 0 && nx < MAP_W )); then
                 tile="${MAP_DATA[$ny]:$nx:1}"
-                if [[ "$tile" == "+" ]]; then 
-                    MAP_DATA[$ny]="${MAP_DATA[$ny]:0:$nx}/${MAP_DATA[$ny]:$((nx+1))}"
-                    LOG="Opened door."
-                    move_enemies; ((LIGHT--))
-                elif [[ "$tile" != "#" ]]; then
-                    handle_move $nx $ny
-                    if [[ "$tile" == "^" ]]; then flash_red; ((HP-=2)); LOG="${RED}Lava burns!${RESET}"; fi
-                    if [[ ${TRAPS["$PX,$PY"]} == 1 ]]; then flash_red; ((HP-=5)); TRAPS["$PX,$PY"]=2; LOG="${RED}TRAP!${RESET}"; fi
-                    move_enemies
-                fi
+                if [[ "$tile" == "+" ]]; then MAP_DATA[$ny]="${MAP_DATA[$ny]:0:$nx}/${MAP_DATA[$ny]:$((nx+1))}"; LOG="Opened door."; move_enemies; ((LIGHT--))
+                elif [[ "$tile" != "#" ]]; then handle_move $nx $ny; [[ $? -eq 0 ]] && move_enemies; fi
             fi
         fi
         render

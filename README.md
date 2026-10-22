@@ -23,12 +23,12 @@ The file follows this column order:
 * **HP:** Monster health / Potion healing.
 * **DAMAGE:** Monster attack power.
 * **ATTACK:** Weapon damage bonus.
-* **AC:** Armor protection.
-* **VALUE:** Max gold drop.
+* **AC:** Armor protection / Monster armor / Potion AC boost.
+* **VALUE:** Max gold drop / Torch fuel / Buff duration.
 
 ## TODO List
 
-- [ ] **Monster HP System:** Make enemies take multiple hits based on their
+- [x] **Monster HP System:** Make enemies take multiple hits based on their
   `HP` stat.
 - [ ] **Experience (XP):** Gain levels and permanent stat boosts through
   combat.
