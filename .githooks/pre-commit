@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+echo "[pre-commit] Checking Bash syntax..."
+bash -n game.sh slash sprites test.sh
+
+echo "[pre-commit] Running test suite..."
+./test.sh

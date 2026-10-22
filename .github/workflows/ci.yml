@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check Bash syntax
+        run: bash -n game.sh slash sprites test.sh
+
+      - name: Run engine and ASCII UI test suite
+        run: ./test.sh
+
+      - name: Build and verify Docker image
+        run: docker build -t slash .

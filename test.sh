@@ -3,7 +3,11 @@ set -uo pipefail
 shopt -s extglob
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR" || exit 1
+
+if [[ -d ".git" && -d ".githooks" && "$(git config --get core.hooksPath)" != ".githooks" ]]; then
+    git config core.hooksPath .githooks
+fi
 
 PASS=0
 FAIL=0
