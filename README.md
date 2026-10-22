@@ -1,10 +1,18 @@
 # slash
 
-A data-driven terminal roguelike engine written in Bash.
+A data-driven terminal roguelike engine written in pure Bash, inspired by the
+classic 1980s UNIX dungeon crawlers [*Hack*](https://en.wikipedia.org/wiki/Hack_(video_game))
+and [*NetHack*](https://www.nethack.org/).
 
-`slash` is designed for **vibe coding**: all monster, equipment, and item
-balance lives in [`game.cfg`](game.cfg), so you can add new content without
-writing a single line of engine code.
+Where *Hack* and *NetHack* gave us the `@` adventurer, `+`/`/` doors, `!`
+potions, `)` weapons, `[` armor, and `$` gold piles—and decades of C
+source—`slash` brings the other half of *hack and slash* to a single Bash
+script with raycast torchlight, 256-color glyphs, and zero compiled
+dependencies.
+
+`slash` is built for **vibe coding**: all monster, equipment, and item balance
+lives in a plain-text table ([`game.cfg`](game.cfg)), so you can invent new
+creatures and loot without touching a line of engine code.
 
 ## Quick Start
 
