@@ -194,15 +194,26 @@ assert_eq "${CUR_MON_HP["6,3"]:-}" "" "removes monster HP entry on lethal hit"
 assert_eq "$HP" "20" "dead monster does not counterattack in move_enemies"
 assert_contains "$LOG" "Killed Giant Bat!" "logs lethal blow message"
 
-# Consumables: Healing clamp & Protection buff expiry
+# Consumables: step announces item, ',' (handle_pickup) uses/equips it
 setup_test_room 10 6
+if handle_pickup; then
+    fail "pressing ',' on empty floor returns 1"
+else
+    pass "pressing ',' on empty floor returns 1"
+fi
+assert_eq "$LOG" "Nothing here to pick up." "pressing ',' on empty floor logs message"
+
 HP=15
 ENTITIES["6,3"]="!_160"
 handle_move 6 3
-assert_eq "$HP" "20" "Potion of Healing restores HP and clamps at MAX_HP"
+assert_eq "$HP" "15" "stepping onto a potion does not auto-quaff it"
+assert_contains "$LOG" "You see Potion of Healing here (press , to pick up)." "stepping onto an item logs pickup hint"
+handle_pickup
+assert_eq "$HP" "20" "pressing ',' on Potion of Healing restores HP and clamps at MAX_HP"
 ENTITIES["7,3"]="!_111"
 handle_move 7 3
-assert_eq "$AC_BOOST:$AC_TIMER" "5:20" "Potion of Protection sets AC_BOOST=5 and AC_TIMER=20"
+handle_pickup
+assert_eq "$AC_BOOST:$AC_TIMER" "5:20" "pressing ',' on Potion of Protection sets AC_BOOST=5 and AC_TIMER=20"
 AC_TIMER=1
 move_enemies
 assert_eq "$AC_BOOST:$AC_TIMER" "0:0" "AC_BOOST resets to 0 when AC_TIMER expires"
@@ -211,14 +222,18 @@ assert_eq "$AC_BOOST:$AC_TIMER" "0:0" "AC_BOOST resets to 0 when AC_TIMER expire
 setup_test_room 10 6
 ENTITIES["6,3"]="m_159"
 handle_move 6 3
-assert_eq "$WEAPON:$ATK" "Steel Mace:10" "picking up weapon updates WEAPON and ATK"
+assert_eq "$WEAPON:$ATK" "Fists:2" "stepping onto weapon does not auto-equip it"
+handle_pickup
+assert_eq "$WEAPON:$ATK" "Steel Mace:10" "pressing ',' on weapon updates WEAPON and ATK"
 ENTITIES["7,3"]="{_245"
 handle_move 7 3
-assert_eq "$ARMOR:$DEF" "Chainmail:4" "picking up armor updates ARMOR and DEF"
+handle_pickup
+assert_eq "$ARMOR:$DEF" "Chainmail:4" "pressing ',' on armor updates ARMOR and DEF"
 LIGHT=50
 ENTITIES["8,3"]="t_208"
 handle_move 8 3
-assert_eq "$LIGHT" "99" "picking up Wooden Torch adds 50 fuel after 1-turn move cost"
+handle_pickup
+assert_eq "$LIGHT" "98" "moving onto and picking up Wooden Torch adds 50 fuel after 2-turn cost"
 
 setup_test_room 10 6
 MAP_DATA[3]="#.....^..#"
@@ -231,16 +246,21 @@ assert_eq "$HP" "13" "stepping on armed trap deals 5 damage"
 assert_eq "${TRAPS["7,3"]}" "2" "stepping on armed trap reveals trap (state 2)"
 assert_contains "$LOG" "TRAP!" "stepping on trap logs trap warning"
 
-# Stairs transition
+# Stairs transition via '>' (handle_descend)
 setup_test_room 10 6
+if handle_descend; then
+    fail "pressing '>' off stairs returns 1"
+else
+    pass "pressing '>' off stairs returns 1"
+fi
+assert_eq "$LOG" "No stairs down here." "pressing '>' off stairs logs message"
 HP=10
 ENTITIES["6,3"]="S_stairs"
-if handle_move 6 3; then
-    fail "stepping on stairs returns 1 to skip enemy phase on old floor"
-else
-    pass "stepping on stairs returns 1 to skip enemy phase on old floor"
-fi
-assert_eq "$LEVEL:$FLOOR:$MAX_HP:$HP" "2:2:25:25" "descending stairs advances level/floor and increases MAX_HP"
+handle_move 6 3
+assert_eq "$LEVEL:$FLOOR" "1:1" "stepping onto stairs does not auto-descend"
+assert_contains "$LOG" "Stairs down here (press > to descend)." "stepping onto stairs logs '>' hint"
+handle_descend
+assert_eq "$LEVEL:$FLOOR:$MAX_HP:$HP" "2:2:25:25" "pressing '>' on stairs advances level/floor and increases MAX_HP"
 
 echo "=== 4. ASCII UI Screen & Framebuffer Rendering ==="
 setup_test_room 10 5

@@ -1,14 +1,14 @@
 # slash
 
 A data-driven terminal roguelike engine written in pure Bash, inspired by the
-classic 1980s UNIX dungeon crawlers [*Hack*](https://en.wikipedia.org/wiki/Hack_(video_game))
-and [*NetHack*](https://www.nethack.org/).
+classic 1980s UNIX dungeon crawlers
+[*Hack*](https://en.wikipedia.org/wiki/Hack_(video_game)) and
+[*NetHack*](https://www.nethack.org/).
 
-Where *Hack* and *NetHack* gave us the `@` adventurer, `+`/`/` doors, `!`
-potions, `)` weapons, `[` armor, and `$` gold piles—and decades of C
-source—`slash` brings the other half of *hack and slash* to a single Bash
-script with raycast torchlight, 256-color glyphs, and zero compiled
-dependencies.
+Where *Hack* and *NetHack* gave us the `@` adventurer, `+` doors, `!` potions,
+`)` weapons, `[` armor, and `$` gold piles—and decades of C source—`slash`
+brings the other half of *hack and slash* to a single Bash script with raycast
+torchlight, 256-color glyphs, and zero compiled dependencies.
 
 `slash` is built for **vibe coding**: all monster, equipment, and item balance
 lives in a plain-text table ([`game.cfg`](game.cfg)), so you can invent new
@@ -37,9 +37,11 @@ To run directly on the host (requires Bash 4+):
 | Key | Action |
 | :--- | :--- |
 | `w` `a` `s` `d` / Arrow Keys | Move, bump-attack monsters, or open closed doors (`+`) |
+| `,` | Pick up / use the item at your feet (wield weapon, wear armor, quaff potion, light torch, collect gold) |
+| `>` | Descend staircase (`>`) to the next dungeon floor |
 | `.` | Wait a turn |
-| `ESC` / `?` | Open Help menu (or cancel an active prompt/modal) |
-| `q` | Quit (prompts for confirmation, or quits immediately from Help) |
+| `ESC` / `?` | Open Help menu (or cancel an active prompt/modal; `Space` also closes Help) |
+| `q` | Quit (prompts for confirmation `[y/n]`, or quits immediately from Help) |
 | `Q` / `Ctrl-C` | Quit immediately |
 | `v` | Toggle debug visibility |
 
@@ -82,10 +84,13 @@ Use `-` for unused numeric columns.
 You can run checks and builds through either `./slash` flags or `make`:
 
 ```sh
+./slash         # or: make run    (build image if needed and launch game)
 ./slash -t      # or: make test   (run engine + 2D ASCII UI test suite)
 ./slash -c      # or: make check  (run bash -n, shellcheck, and ./test.sh)
 ./slash -b      # or: make build  (force Docker image rebuild with test gate)
 ./slash -h      # show CLI options
+make lint       # run bash -n and shellcheck only
+make hooks      # configure git core.hooksPath -> .githooks
 ```
 
 ### Debugging & Deterministic Rendering
@@ -105,7 +110,11 @@ Running `./slash`, `./test.sh`, or `make hooks` automatically points
   the 50/72 line-length rule.
 - **`pre-push`**: Runs `./test.sh` before pushing.
 
-If you use the [`pre-commit`](https://pre-commit.com/) framework or [`act`](https://github.com/nektos/act) (`gh act`), [`.pre-commit-config.yaml`](.pre-commit-config.yaml) and [`.github/workflows/ci.yml`](.github/workflows/ci.yml) are also configured out of the box.
+If you use the [`pre-commit`](https://pre-commit.com/) framework or
+[`act`](https://github.com/nektos/act) (`gh act`),
+[`.pre-commit-config.yaml`](.pre-commit-config.yaml) and
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) are also configured out
+of the box.
 
 ## Roadmap
 

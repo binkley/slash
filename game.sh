@@ -187,6 +187,8 @@ render_help() {
     local lines=(
         "+------------ SLASH HELP ------------+"
         "| Move / Attack : w a s d or Arrows  |"
+        "| Pick Up / Use : ,                  |"
+        "| Descend Stairs: >                  |"
         "| Open Door     : Bump into +        |"
         "| Wait 1 Turn   : .                  |"
         "| Toggle Debug  : v                  |"
@@ -209,8 +211,42 @@ handle_move() {
     local nx=$1 ny=$2; local key="${ENTITIES["$nx,$ny"]:-}"; local type=""
     [[ -n "$key" ]] && type="${TYPE_DB["$key"]:-}"
     ((LIGHT--))
+    if [[ "$type" == "MON" ]]; then
+        local base_pdmg=$(( ATK + (RANDOM % 3) ))
+        local mac=${AC_DB["$key"]}
+        local final_pdmg=$(( base_pdmg - mac ))
+        (( final_pdmg < 0 )) && final_pdmg=0
+        (( CUR_MON_HP["$nx,$ny"] -= final_pdmg ))
+        if (( CUR_MON_HP["$nx,$ny"] <= 0 )); then
+            LOG="Killed ${NAME_DB["$key"]}! Final blow dealt $final_pdmg dmg."
+            unset 'ENTITIES["'$nx,$ny'"]'; unset 'CUR_MON_HP["'$nx,$ny'"]'
+        else
+            LOG="Hit ${NAME_DB["$key"]} for $final_pdmg ($base_pdmg-$mac AC). HP: ${CUR_MON_HP["$nx,$ny"]}."
+        fi
+        return 0
+    fi
+    PX=$nx; PY=$ny
+    local tile="${MAP_DATA[$PY]:$PX:1}"
+    if [[ "$tile" == "^" ]]; then flash_red; ((HP -= 2)); LOG="${RED}Lava burns!${RESET}"; fi
+    if [[ ${TRAPS["$PX,$PY"]:-0} == 1 ]]; then flash_red; ((HP -= 5)); TRAPS["$PX,$PY"]=2; LOG="${RED}TRAP!${RESET}"; fi
+    if [[ "$key" == "S_stairs" ]]; then
+        LOG="Stairs down here (press > to descend)."
+    elif [[ -n "$key" && -n "${NAME_DB["$key"]:-}" ]]; then
+        LOG="You see ${NAME_DB["$key"]} here (press , to pick up)."
+    fi
+    return 0
+}
+
+handle_pickup() {
+    local key="${ENTITIES["$PX,$PY"]:-}"
+    if [[ -z "$key" || "$key" == "S_stairs" ]]; then
+        LOG="Nothing here to pick up."
+        return 1
+    fi
+    local type="${TYPE_DB["$key"]:-}"
+    ((LIGHT--))
     case "$type" in
-        POT) 
+        POT)
             local heal=${HP_DB["$key"]}
             local acb=${AC_DB["$key"]}
             if (( heal > 0 )); then
@@ -220,30 +256,25 @@ handle_move() {
                 AC_BOOST=$acb; AC_TIMER=${VAL_DB["$key"]}
                 LOG="${CYAN}You feel protected! ${NAME_DB["$key"]} used.${RESET}"
             fi
-            unset 'ENTITIES["'$nx,$ny'"]' ;;
-        TOR) ((LIGHT += VAL_DB["$key"])); LOG="${YELLOW}You light a ${NAME_DB["$key"]} (+${VAL_DB["$key"]} turns).${RESET}"; unset 'ENTITIES["'$nx,$ny'"]' ;;
-        WEP) ATK=${ATK_DB["$key"]}; WEAPON="${NAME_DB["$key"]}"; LOG="Found ${NAME_DB["$key"]}."; unset 'ENTITIES["'$nx,$ny'"]' ;;
-        ARM) DEF=${AC_DB["$key"]}; ARMOR="${NAME_DB["$key"]}"; LOG="Wore ${NAME_DB["$key"]}."; unset 'ENTITIES["'$nx,$ny'"]' ;;
-        MON)
-            local base_pdmg=$(( ATK + (RANDOM % 3) ))
-            local mac=${AC_DB["$key"]}
-            local final_pdmg=$(( base_pdmg - mac ))
-            (( final_pdmg < 0 )) && final_pdmg=0
-            (( CUR_MON_HP["$nx,$ny"] -= final_pdmg ))
-            if (( CUR_MON_HP["$nx,$ny"] <= 0 )); then
-                LOG="Killed ${NAME_DB["$key"]}! Final blow dealt $final_pdmg dmg."
-                unset 'ENTITIES["'$nx,$ny'"]'; unset 'CUR_MON_HP["'$nx,$ny'"]'
-            else
-                LOG="Hit ${NAME_DB["$key"]} for $final_pdmg ($base_pdmg-$mac AC). HP: ${CUR_MON_HP["$nx,$ny"]}."
-            fi
-            return 0 ;;
-        GOL) local g=$(( RANDOM % VAL_DB["$key"] + 1 )); ((GOLD += g)); LOG="Found $g gold nuggets."; unset 'ENTITIES["'$nx,$ny'"]' ;;
+            unset 'ENTITIES["'$PX,$PY'"]' ;;
+        TOR) ((LIGHT += VAL_DB["$key"])); LOG="${YELLOW}You light a ${NAME_DB["$key"]} (+${VAL_DB["$key"]} turns).${RESET}"; unset 'ENTITIES["'$PX,$PY'"]' ;;
+        WEP) ATK=${ATK_DB["$key"]}; WEAPON="${NAME_DB["$key"]}"; LOG="Found ${NAME_DB["$key"]}."; unset 'ENTITIES["'$PX,$PY'"]' ;;
+        ARM) DEF=${AC_DB["$key"]}; ARMOR="${NAME_DB["$key"]}"; LOG="Wore ${NAME_DB["$key"]}."; unset 'ENTITIES["'$PX,$PY'"]' ;;
+        GOL) local g=$(( RANDOM % VAL_DB["$key"] + 1 )); ((GOLD += g)); LOG="Found $g gold nuggets."; unset 'ENTITIES["'$PX,$PY'"]' ;;
     esac
-    [[ "$key" == "S_stairs" ]] && { ((LEVEL++)); ((FLOOR++)); ((MAX_HP+=5)); HP=$MAX_HP; LOG="Deeper..."; generate_dungeon; echo -ne "$CLR"; return 1; }
-    PX=$nx; PY=$ny
-    local tile="${MAP_DATA[$PY]:$PX:1}"
-    if [[ "$tile" == "^" ]]; then flash_red; ((HP -= 2)); LOG="${RED}Lava burns!${RESET}"; fi
-    if [[ ${TRAPS["$PX,$PY"]:-0} == 1 ]]; then flash_red; ((HP -= 5)); TRAPS["$PX,$PY"]=2; LOG="${RED}TRAP!${RESET}"; fi
+    return 0
+}
+
+handle_descend() {
+    local key="${ENTITIES["$PX,$PY"]:-}"
+    if [[ "$key" != "S_stairs" ]]; then
+        LOG="No stairs down here."
+        return 1
+    fi
+    ((LEVEL++)); ((FLOOR++)); ((MAX_HP+=5)); HP=$MAX_HP; LOG="Deeper..."
+    generate_dungeon
+    echo -ne "$CLR"
+    return 0
 }
 
 # --- 7. MAIN ---
@@ -296,6 +327,8 @@ run_game() {
             s) ((ny++)); processed=1 ;;
             a) ((nx--)); processed=1 ;;
             d) ((nx++)); processed=1 ;;
+            ,) handle_pickup && move_enemies; render; continue ;;
+            '>') handle_descend; render; continue ;;
             .) LOG="Waiting..."; move_enemies; ((LIGHT--)); processed=1 ;;
             v) ((DEBUG = !DEBUG)); processed=1 ;;
             ESC|'?') UI_MODE="help"; LOG="HELP: [q] Quit  [ESC/?/Space] Resume"; render; continue ;;
