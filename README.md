@@ -8,6 +8,7 @@ Try `./slash`. This runs:
 
 1. **Build:** `docker build -t slash .`
 2. **Play:** `docker run -it --rm slash`
+3. **Test:** `./test.sh`
 
 ## The Vibe
 
