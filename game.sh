@@ -57,7 +57,9 @@ load_entities() {
 flash_red() { echo -ne "\e[H\e[48;5;52m\e[J"; sleep 0.03; echo -ne "${RESET}\e[H\e[J"; }
 
 # --- 4. ENGINE CORE ---
-declare -A VISITED ENTITIES TRAPS CUR_MON_HP
+declare -A VISITED ENTITIES TRAPS CUR_MON_HP IDENTIFIED
+INVENTORY=()
+MAX_INV=9
 
 generate_dungeon() {
     MAP_DATA=(); VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
@@ -200,7 +202,11 @@ render() {
         frame+=$'\r\n'
     done
     echo -ne "$frame"
-    [[ "${UI_MODE:-}" == "help" ]] && render_help
+    if [[ "${UI_MODE:-}" == "help" ]]; then
+        render_help
+    elif [[ "${UI_MODE:-}" == "inventory" ]]; then
+        render_inventory
+    fi
     printf '\e[%d;1H' $((MAP_H + 1))
     local total_def=$(( DEF + AC_BOOST ))
     printf "${RESET}LVL: ${CYAN}$LEVEL${RESET} | HP: ${hp_col}$HP/$MAX_HP${RESET} | Fuel: ${light_col}$LIGHT${RESET} | AC: ${CYAN}$total_def${RESET} (${AC_TIMER}t)\e[K\r\n"
@@ -212,7 +218,8 @@ render_help() {
     local lines=(
         "+------------ SLASH HELP ------------+"
         "| Move / Attack : w a s d or Arrows  |"
-        "| Pick Up / Use : ,                  |"
+        "| Pick Up Item  : ,                  |"
+        "| Inventory     : i ([1-9] use/equip)|"
         "| Descend Stairs: >                  |"
         "| Open Door     : Bump into +        |"
         "| Wait 1 Turn   : .                  |"
@@ -227,6 +234,98 @@ render_help() {
     (( start_y < 1 )) && start_y=1
     (( start_x < 1 )) && start_x=1
     local i
+    for ((i=0; i<box_h; i++)); do
+        printf '\e[%d;%dH%s%s%s' $((start_y + i)) "$start_x" "$CYAN" "${lines[$i]}" "$RESET"
+    done
+}
+
+unidentified_desc() {
+    local key="$1"
+    local type="${TYPE_DB["$key"]:-}"
+    local col="${key#*_}"
+    case "$type" in
+        POT)
+            local adj="murky"
+            case "$col" in
+                160|196) adj="ruby" ;;
+                111|39|45|51) adj="sapphire" ;;
+                46|70|82) adj="emerald" ;;
+                208|214|220|226) adj="amber" ;;
+                135|201|213) adj="violet" ;;
+            esac
+            printf '%s potion (? effect)' "$adj"
+            ;;
+        WEP) printf '%s (? ATK)' "${NAME_DB["$key"]}" ;;
+        ARM) printf '%s (? AC)' "${NAME_DB["$key"]}" ;;
+        TOR) printf '%s (? fuel)' "${NAME_DB["$key"]}" ;;
+        *)   printf '%s' "${NAME_DB["$key"]:-unknown}" ;;
+    esac
+}
+
+identified_desc() {
+    local key="$1"
+    local type="${TYPE_DB["$key"]:-}"
+    case "$type" in
+        POT)
+            if (( ${HP_DB["$key"]:-0} > 0 )); then
+                printf '%s (+%d HP)' "${NAME_DB["$key"]}" "${HP_DB["$key"]}"
+            elif (( ${AC_DB["$key"]:-0} > 0 )); then
+                printf '%s (+%d AC, %dt)' "${NAME_DB["$key"]}" "${AC_DB["$key"]}" "${VAL_DB["$key"]}"
+            else
+                printf '%s' "${NAME_DB["$key"]}"
+            fi
+            ;;
+        WEP) printf '%s (+%d ATK)' "${NAME_DB["$key"]}" "${ATK_DB["$key"]}" ;;
+        ARM) printf '%s (+%d AC)' "${NAME_DB["$key"]}" "${AC_DB["$key"]}" ;;
+        TOR) printf '%s (+%d turns)' "${NAME_DB["$key"]}" "${VAL_DB["$key"]}" ;;
+        GOL) printf '%s (1-%d Au)' "${NAME_DB["$key"]}" "${VAL_DB["$key"]}" ;;
+        *)   printf '%s' "${NAME_DB["$key"]:-unknown}" ;;
+    esac
+}
+
+item_desc() {
+    local key="$1"
+    if [[ -n "${IDENTIFIED["$key"]:-}" ]]; then
+        identified_desc "$key"
+    else
+        unidentified_desc "$key"
+    fi
+}
+
+pad_right() {
+    local text="$1" width="${2:-38}"
+    (( ${#text} > width )) && text="${text:0:$width}"
+    printf '%-*s' "$width" "$text"
+}
+
+render_inventory() {
+    local total_def=$(( DEF + AC_BOOST ))
+    local lines=(
+        "+--------------- INVENTORY ---------------+"
+        "| $(pad_right "Wielded: $WEAPON (+$ATK ATK)" 39) |"
+        "| $(pad_right "Worn   : $ARMOR (+$total_def AC)" 39) |"
+        "|-----------------------------------------|"
+    )
+    local i
+    if (( ${#INVENTORY[@]} == 0 )); then
+        lines+=("| $(pad_right "(Pack is empty - press , on items)" 39) |")
+    else
+        for ((i=0; i<${#INVENTORY[@]}; i++)); do
+            local key="${INVENTORY[$i]}"
+            local entry="[$(($i + 1))] $(item_desc "$key")"
+            lines+=("| $(pad_right "$entry" 39) |")
+        done
+    fi
+    lines+=(
+        "|-----------------------------------------|"
+        "| [1-9] Use/Equip    [ESC/i/Space] Resume |"
+        "+-----------------------------------------+"
+    )
+    local box_h=${#lines[@]} box_w=${#lines[0]}
+    local start_y=$(( (MAP_H - box_h) / 2 + 1 ))
+    local start_x=$(( (MAP_W - box_w) / 2 + 1 ))
+    (( start_y < 1 )) && start_y=1
+    (( start_x < 1 )) && start_x=1
     for ((i=0; i<box_h; i++)); do
         printf '\e[%d;%dH%s%s%s' $((start_y + i)) "$start_x" "$CYAN" "${lines[$i]}" "$RESET"
     done
@@ -274,7 +373,7 @@ render_tombstone() {
         "You were wielding ${WEAPON} (ATK ${ATK}) and wearing ${ARMOR} (AC ${total_def}) with ${MAX_HP} max HP"
         "when you were ${verb} ${by}."
         ""
-        "[Press Space, Enter, ESC, or q to exit]"
+        "Do you want your possessions identified? [y] Yes  [n/Space/q] Exit"
     )
 
     echo -ne "$CLR"
@@ -301,6 +400,49 @@ render_tombstone() {
         local ep_col="$RESET"
         (( i == ${#epitaph[@]} - 1 )) && ep_col="$YELLOW"
         printf '\e[%d;%dH%s%s%s' $((ep_base + i)) "$ep_x" "$ep_col" "$line" "$RESET"
+    done
+}
+
+render_possessions() {
+    local total_def=$(( DEF + AC_BOOST ))
+    local lines=(
+        "+------------------------- POSSESSIONS IDENTIFIED -------------------------+"
+        "| $(pad_right "Wielded : $WEAPON (+$ATK ATK)" 72) |"
+        "| $(pad_right "Worn    : $ARMOR (+$total_def AC)" 72) |"
+        "| $(pad_right "Purse   : $GOLD Au" 72) |"
+        "|--------------------------------------------------------------------------|"
+    )
+    local i
+    if (( ${#INVENTORY[@]} == 0 )); then
+        lines+=("| $(pad_right "(Your pack was empty.)" 72) |")
+    else
+        for ((i=0; i<${#INVENTORY[@]}; i++)); do
+            local key="${INVENTORY[$i]}"
+            local full_name unid_name entry
+            full_name="$(identified_desc "$key")"
+            if [[ -z "${IDENTIFIED["$key"]:-}" ]]; then
+                unid_name="$(unidentified_desc "$key")"
+                entry="[$(($i + 1))] $full_name [was: $unid_name]"
+            else
+                entry="[$(($i + 1))] $full_name"
+            fi
+            IDENTIFIED["$key"]=1
+            lines+=("| $(pad_right "$entry" 72) |")
+        done
+    fi
+    lines+=(
+        "|--------------------------------------------------------------------------|"
+        "|                 [Press Space, Enter, ESC, or q to exit]                  |"
+        "+--------------------------------------------------------------------------+"
+    )
+    echo -ne "$CLR"
+    local box_h=${#lines[@]} box_w=${#lines[0]}
+    local start_y=$(( (MAP_H + 3 - box_h) / 2 + 1 ))
+    local start_x=$(( (MAP_W - box_w) / 2 + 1 ))
+    (( start_y < 1 )) && start_y=1
+    (( start_x < 1 )) && start_x=1
+    for ((i=0; i<box_h; i++)); do
+        printf '\e[%d;%dH%s%s%s' $((start_y + i)) "$start_x" "$CYAN" "${lines[$i]}" "$RESET"
     done
 }
 
@@ -335,7 +477,7 @@ handle_move() {
     if [[ "$key" == "S_stairs" ]]; then
         LOG="Stairs down here (press > to descend)."
     elif [[ -n "$key" && -n "${NAME_DB["$key"]:-}" ]]; then
-        LOG="You see ${NAME_DB["$key"]} here (press , to pick up)."
+        LOG="You see $(item_desc "$key") here (press , to pick up)."
     fi
     return 0
 }
@@ -347,6 +489,35 @@ handle_pickup() {
         return 1
     fi
     local type="${TYPE_DB["$key"]:-}"
+    if [[ "$type" == "GOL" ]]; then
+        ((LIGHT--))
+        local g=$(( RANDOM % VAL_DB["$key"] + 1 ))
+        ((GOLD += g))
+        LOG="Found $g gold nuggets."
+        unset 'ENTITIES["'$PX,$PY'"]'
+        return 0
+    fi
+    if (( ${#INVENTORY[@]} >= MAX_INV )); then
+        LOG="Pack is full! (press i to use an item)"
+        return 1
+    fi
+    ((LIGHT--))
+    INVENTORY+=("$key")
+    unset 'ENTITIES["'$PX,$PY'"]'
+    LOG="Picked up $(item_desc "$key") [slot ${#INVENTORY[@]}, press i]."
+    return 0
+}
+
+use_inventory_item() {
+    local slot="${1:-0}"
+    local idx=$(( slot - 1 ))
+    if (( idx < 0 || idx >= ${#INVENTORY[@]} )); then
+        LOG="No item in slot [$slot]."
+        return 1
+    fi
+    local key="${INVENTORY[$idx]}"
+    local type="${TYPE_DB["$key"]:-}"
+    IDENTIFIED["$key"]=1
     ((LIGHT--))
     case "$type" in
         POT)
@@ -354,17 +525,23 @@ handle_pickup() {
             local acb=${AC_DB["$key"]}
             if (( heal > 0 )); then
                 ((HP += heal)); ((HP > MAX_HP)) && HP=$MAX_HP
-                LOG="${GREEN}Gulp! ${NAME_DB["$key"]}.${RESET}"
+                LOG="${GREEN}Gulp! $(identified_desc "$key").${RESET}"
             elif (( acb > 0 )); then
                 AC_BOOST=$acb; AC_TIMER=${VAL_DB["$key"]}
-                LOG="${CYAN}You feel protected! ${NAME_DB["$key"]} used.${RESET}"
-            fi
-            unset 'ENTITIES["'$PX,$PY'"]' ;;
-        TOR) ((LIGHT += VAL_DB["$key"])); LOG="${YELLOW}You light a ${NAME_DB["$key"]} (+${VAL_DB["$key"]} turns).${RESET}"; unset 'ENTITIES["'$PX,$PY'"]' ;;
-        WEP) ATK=${ATK_DB["$key"]}; WEAPON="${NAME_DB["$key"]}"; LOG="Found ${NAME_DB["$key"]}."; unset 'ENTITIES["'$PX,$PY'"]' ;;
-        ARM) DEF=${AC_DB["$key"]}; ARMOR="${NAME_DB["$key"]}"; LOG="Wore ${NAME_DB["$key"]}."; unset 'ENTITIES["'$PX,$PY'"]' ;;
-        GOL) local g=$(( RANDOM % VAL_DB["$key"] + 1 )); ((GOLD += g)); LOG="Found $g gold nuggets."; unset 'ENTITIES["'$PX,$PY'"]' ;;
+                LOG="${CYAN}You feel protected! $(identified_desc "$key") used.${RESET}"
+            fi ;;
+        TOR)
+            ((LIGHT += VAL_DB["$key"]))
+            LOG="${YELLOW}You light a $(identified_desc "$key").${RESET}" ;;
+        WEP)
+            ATK=${ATK_DB["$key"]}; WEAPON="${NAME_DB["$key"]}"
+            LOG="Wielded $(identified_desc "$key")." ;;
+        ARM)
+            DEF=${AC_DB["$key"]}; ARMOR="${NAME_DB["$key"]}"
+            LOG="Wore $(identified_desc "$key")." ;;
     esac
+    INVENTORY=("${INVENTORY[@]:0:$idx}" "${INVENTORY[@]:$((idx + 1))}")
+    UI_MODE=""
     return 0
 }
 
@@ -423,6 +600,18 @@ run_game() {
                 ESC|'?'|' ') UI_MODE=""; LOG="Resumed."; render ;;
             esac
             continue
+        elif [[ "$UI_MODE" == "inventory" ]]; then
+            case "$key" in
+                [1-9])
+                    if use_inventory_item "$key"; then
+                        move_enemies
+                    fi
+                    render
+                    ;;
+                ESC|i|' ') UI_MODE=""; LOG="Resumed."; render ;;
+                q|Q) break ;;
+            esac
+            continue
         fi
         processed=0; nx=$PX; ny=$PY
         case "$key" in
@@ -431,6 +620,7 @@ run_game() {
             a) ((nx--)); processed=1 ;;
             d) ((nx++)); processed=1 ;;
             ,) handle_pickup && move_enemies; render; continue ;;
+            i) UI_MODE="inventory"; LOG="INVENTORY: [1-9] Use/Equip  [ESC/i/Space] Resume"; render; continue ;;
             '>') handle_descend; render; continue ;;
             .) LOG="Waiting..."; move_enemies; ((LIGHT--)); processed=1 ;;
             v) ((DEBUG = !DEBUG)); processed=1 ;;
@@ -460,8 +650,13 @@ run_game() {
                 fi
                 key="ESC"
             fi
+            if [[ "$UI_MODE" != "possessions" && "$key" =~ ^[yYiI]$ ]]; then
+                UI_MODE="possessions"
+                render_possessions
+                continue
+            fi
             case "$key" in
-                ""|' '|q|Q|ESC|$'\x03') break ;;
+                ""|' '|n|N|q|Q|ESC|$'\x03') break ;;
             esac
         done
     fi

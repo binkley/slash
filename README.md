@@ -39,7 +39,8 @@ To run directly on the host (requires Bash 4+):
 | Key | Action |
 | :--- | :--- |
 | `w` `a` `s` `d` / Arrow Keys | Move, bump-attack monsters, or open closed doors (`+`) |
-| `,` | Pick up / use the item at your feet (wield weapon, wear armor, quaff potion, light torch, collect gold) |
+| `,` | Pick up the item at your feet into your pack (gold is collected immediately) |
+| `i` | Open Inventory to use or equip carried items (`1`–`9` to select; identifies item type) |
 | `>` | Descend staircase (`>`) to the next dungeon floor |
 | `.` | Wait a turn |
 | `ESC` / `?` | Open Help menu (or cancel an active prompt/modal; `Space` also closes Help) |
@@ -126,5 +127,5 @@ of the box.
 - [x] **Timed Buffs:** `Potion of Protection` (`AC_BOOST` / `AC_TIMER`).
 - [ ] **Experience (XP):** Gain levels and permanent stat boosts through
   combat.
-- [ ] **Identify Mechanics:** Hide item stats until they are used or
-  identified.
+- [x] **Identify Mechanics:** Hide item stats until they are used or
+  identified (or revealed on the post-mortem screen).

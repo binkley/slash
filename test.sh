@@ -83,6 +83,8 @@ setup_test_room() {
     ENTITIES=()
     TRAPS=()
     CUR_MON_HP=()
+    IDENTIFIED=()
+    INVENTORY=()
 
     local wall_row floor_row
     wall_row=$(printf "%${w}s" | tr ' ' '#')
@@ -215,7 +217,10 @@ assert_eq "${CUR_MON_HP["3,2"]:-}" "3" "monster with '-' regen (Grid Bug) does n
 assert_contains "$LOG" "Troll heals 1 HP!" "logs monster regeneration amount in HUD LOG"
 assert_contains "$LOG" "Hydra heals 1 HP!" "logs clamped regeneration amount when near max HP"
 
-# Consumables: step announces item, ',' (handle_pickup) uses/equips it
+# Consumables, Inventory & Identify Mechanics:
+# - stepping onto an unidentified item hides its identity/stats
+# - pressing ',' (handle_pickup) stores non-gold items in INVENTORY
+# - using an item from INVENTORY (use_inventory_item) applies its effect and marks IDENTIFIED[$key]=1
 setup_test_room 10 6
 if handle_pickup; then
     fail "pressing ',' on empty floor returns 1"
@@ -224,37 +229,73 @@ else
 fi
 assert_eq "$LOG" "Nothing here to pick up." "pressing ',' on empty floor logs message"
 
+if use_inventory_item 1; then
+    fail "using an empty inventory slot returns 1"
+else
+    pass "using an empty inventory slot returns 1"
+fi
+assert_eq "$LOG" "No item in slot [1]." "using an empty inventory slot logs message"
+
 HP=15
 ENTITIES["6,3"]="!_160"
 handle_move 6 3
 assert_eq "$HP" "15" "stepping onto a potion does not auto-quaff it"
-assert_contains "$LOG" "You see Potion of Healing here (press , to pick up)." "stepping onto an item logs pickup hint"
+assert_contains "$LOG" "You see ruby potion (? effect) here (press , to pick up)." "stepping onto an unidentified potion hides its true identity"
 handle_pickup
-assert_eq "$HP" "20" "pressing ',' on Potion of Healing restores HP and clamps at MAX_HP"
+assert_eq "$HP:${#INVENTORY[@]}:${INVENTORY[0]:-}" "15:1:!_160" "pressing ',' stashes potion in INVENTORY without auto-quaffing"
+use_inventory_item 1
+assert_eq "$HP:${#INVENTORY[@]}:${IDENTIFIED["!_160"]:-0}" "20:0:1" "using Potion of Healing from inventory restores HP, removes from pack, and identifies !_160"
+
+# Subsequent encounters with an identified item type show its true name and stats on the floor
+ENTITIES["6,3"]="!_160"
+PX=5; PY=3
+handle_move 6 3
+assert_contains "$LOG" "You see Potion of Healing (+10 HP) here (press , to pick up)." "stepping onto a previously identified item reveals its true name and stats"
+
 ENTITIES["7,3"]="!_111"
 handle_move 7 3
+assert_contains "$LOG" "You see sapphire potion (? effect) here (press , to pick up)." "unidentified blue potion shows as sapphire potion (? effect)"
 handle_pickup
-assert_eq "$AC_BOOST:$AC_TIMER" "5:20" "pressing ',' on Potion of Protection sets AC_BOOST=5 and AC_TIMER=20"
+use_inventory_item 1
+assert_eq "$AC_BOOST:$AC_TIMER:${IDENTIFIED["!_111"]:-0}" "5:20:1" "using Potion of Protection from inventory sets AC_BOOST=5, AC_TIMER=20, and identifies !_111"
 AC_TIMER=1
 move_enemies
 assert_eq "$AC_BOOST:$AC_TIMER" "0:0" "AC_BOOST resets to 0 when AC_TIMER expires"
 
-# Equipment, Torch, Gold & Hazards
+# Equipment, Torch, Gold, Pack Capacity & Hazards
 setup_test_room 10 6
 ENTITIES["6,3"]="m_159"
 handle_move 6 3
 assert_eq "$WEAPON:$ATK" "Fists:2" "stepping onto weapon does not auto-equip it"
+assert_contains "$LOG" "You see Steel Mace (? ATK) here (press , to pick up)." "stepping onto unidentified weapon hides its ATK bonus"
 handle_pickup
-assert_eq "$WEAPON:$ATK" "Steel Mace:10" "pressing ',' on weapon updates WEAPON and ATK"
+use_inventory_item 1
+assert_eq "$WEAPON:$ATK:${IDENTIFIED["m_159"]:-0}" "Steel Mace:10:1" "equipping weapon from inventory updates WEAPON, ATK, and identifies weapon"
 ENTITIES["7,3"]="{_245"
 handle_move 7 3
+assert_contains "$LOG" "You see Chainmail (? AC) here (press , to pick up)." "stepping onto unidentified armor hides its AC rating"
 handle_pickup
-assert_eq "$ARMOR:$DEF" "Chainmail:4" "pressing ',' on armor updates ARMOR and DEF"
+use_inventory_item 1
+assert_eq "$ARMOR:$DEF:${IDENTIFIED["{_245"]:-0}" "Chainmail:4:1" "equipping armor from inventory updates ARMOR, DEF, and identifies armor"
 LIGHT=50
 ENTITIES["8,3"]="t_208"
 handle_move 8 3
 handle_pickup
-assert_eq "$LIGHT" "98" "moving onto and picking up Wooden Torch adds 50 fuel after 2-turn cost"
+use_inventory_item 1
+assert_eq "$LIGHT" "97" "moving onto, picking up, and lighting Wooden Torch adds 50 fuel after 3-turn cost"
+
+# Failure mode: full pack (MAX_INV=9) rejects non-gold pickup without destroying floor item
+setup_test_room 10 6
+INVENTORY=("!_160" "!_160" "!_160" "!_160" "!_160" "!_160" "!_160" "!_160" "!_160")
+ENTITIES["6,3"]="m_159"
+handle_move 6 3
+if handle_pickup; then
+    fail "handle_pickup returns 1 when INVENTORY is full (9 items)"
+else
+    pass "handle_pickup returns 1 when INVENTORY is full (9 items)"
+fi
+assert_eq "${ENTITIES["6,3"]:-}" "m_159" "preserves item on floor when pack is full"
+assert_contains "$LOG" "Pack is full!" "logs full pack warning"
 
 setup_test_room 10 6
 MAP_DATA[3]="#.....^..#"
@@ -464,6 +505,30 @@ else
     printf '  \e[31m✗\e[0m %s\n' "Pressing 'q' inside Help menu exits immediately without processing trailing keys"
 fi
 
+# Interactive inventory modal ('i') and item identification ('1'..'9')
+e2e_inv_out="$(
+    bash -c '
+        source "'"$SCRIPT_DIR"'/game.sh"
+        flash_red() { :; }
+        load_entities
+        generate_dungeon() {
+            MAP_W=8; MAP_H=4; FLICKER=0; BASE_VIEW=2
+            MAP_DATA=("########" "#......#" "#......#" "########")
+            VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
+            IDENTIFIED=(); INVENTORY=()
+            PX=2; PY=1; HP=12; MAX_HP=20
+            ENTITIES["3,1"]="!_160"
+        }
+        # Move right onto !_160 ("d"), pick up (","), open inventory ("i"), quaff slot 1 ("1"), quit ("Q")
+        printf "d,i1Q" | run_game
+    '
+)"
+plain_inv="$(strip_ansi "$e2e_inv_out")"
+assert_contains "$plain_inv" "LOG: Picked up ruby potion (? effect) [slot 1, press i]." "E2E ',' picks up unidentified potion into slot 1"
+assert_contains "$plain_inv" "+--------------- INVENTORY ---------------+" "E2E 'i' opens the INVENTORY overlay"
+assert_contains "$plain_inv" "[1] ruby potion (? effect)" "E2E INVENTORY overlay displays unidentified item label"
+assert_contains "$plain_inv" "LOG: Gulp! Potion of Healing (+10 HP)." "E2E pressing '1' in INVENTORY quaffs and identifies the potion"
+
 # Tombstone screen on player death: renders NetHack post-mortem screen, ignores buffered movement keys, exits on Space/q
 e2e_death_out="$(
     bash -c '
@@ -473,7 +538,7 @@ e2e_death_out="$(
         PLAYER_NAME="Hero"
         DEATH_YEAR="2026"
         generate_dungeon() {
-            MAP_W=80; MAP_H=19; FLICKER=0
+            MAP_W=80; MAP_H=19; FLICKER=0; BASE_VIEW=2
             local wall_row floor_row y
             wall_row=$(printf "%80s" | tr " " "#")
             floor_row="#$(printf "%78s" | tr " " ".")#"
@@ -482,14 +547,17 @@ e2e_death_out="$(
                 (( y == 0 || y == 18 )) && MAP_DATA[$y]="$wall_row" || MAP_DATA[$y]="$floor_row"
             done
             VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
+            IDENTIFIED=(["!_160"]=1)
+            INVENTORY=("!_111" "m_159" "!_160")
             PX=5; PY=5
             HP=2; MAX_HP=25; LEVEL=3; FLOOR=3; GOLD=77
             WEAPON="Steel Blade"; ARMOR="Chainmail"; ATK=6; DEF=4
             ENTITIES["6,5"]="D_160"
             CUR_MON_HP["6,5"]=30
         }
-        # Wait (.) so Young Dragon (12 dmg vs 4 DEF = 8 dmg) kills player; trailing "d" is ignored on tombstone, " " exits
-        printf ".d " | run_game
+        # Wait (.) so Young Dragon (12 dmg vs 4 DEF = 8 dmg) kills player;
+        # trailing "d" is ignored on tombstone, "y" opens POSSESSIONS IDENTIFIED, " " exits
+        printf ".dy " | run_game
     '
 )"
 plain_death="$(strip_ansi "$e2e_death_out")"
@@ -502,6 +570,11 @@ assert_contains "$plain_death" "Goodbye Hero the Level 3 Adventurer..." "renders
 assert_contains "$plain_death" "You died in The Dungeons of SLASH on dungeon level 3 with 77 Au." "renders dungeon level and Au in post-mortem summary"
 assert_contains "$plain_death" "You were wielding Steel Blade (ATK 6) and wearing Chainmail (AC 4) with 25 max HP" "renders equipment and max HP in post-mortem summary"
 assert_contains "$plain_death" "when you were killed by a Young Dragon." "renders full cause of death sentence in post-mortem summary"
+assert_contains "$plain_death" "Do you want your possessions identified? [y] Yes  [n/Space/q] Exit" "prompts to identify possessions on post-mortem screen"
+assert_contains "$plain_death" "+------------------------- POSSESSIONS IDENTIFIED -------------------------+" "pressing 'y' on tombstone opens POSSESSIONS IDENTIFIED screen"
+assert_contains "$plain_death" "[1] Potion of Protection (+5 AC, 20t) [was: sapphire potion (? effect)]" "reveals unidentified potion in pack with its prior mystery label"
+assert_contains "$plain_death" "[2] Steel Mace (+10 ATK) [was: Steel Mace (? ATK)]" "reveals unidentified weapon stats in pack"
+assert_contains "$plain_death" "[3] Potion of Healing (+10 HP)" "lists already-identified pack item without '[was: ...]' suffix"
 
 echo "=== 6. Deterministic SVG Screenshot Generation ==="
 svg_tmp="$SCRIPT_DIR/.test-screenshot.svg"
