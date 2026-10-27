@@ -210,7 +210,7 @@ render() {
     echo -ne "$frame"
     if [[ "${UI_MODE:-}" == "help" ]]; then
         render_help
-    elif [[ "${UI_MODE:-}" == "inventory" ]]; then
+    elif [[ "${UI_MODE:-}" == "inventory" || "${UI_MODE:-}" == "drop" ]]; then
         render_inventory
     fi
     printf '\e[%d;1H' $((MAP_H + 1))
@@ -223,15 +223,16 @@ render() {
 render_help() {
     local lines=(
         "+------------ SLASH HELP ------------+"
-        "| Move (4-way)  : wasd / Arrows      |"
-        "| Move (8-way)  : hjkl+yubn / Numpad |"
-        "| Pick Up Item  : ,                  |"
-        "| Inventory     : i ([1-9] use/equip)|"
+        "| Move (4-way)  : hjkl / Arrows/8462 |"
+        "| Move (Diag)   : yubn / Numpad 7913 |"
+        "| Search Traps  : s                  |"
+        "| Pick Up / Drop: , / d              |"
+        "| Pack / Use    : i, q, w, W, a [1-9]|"
         "| Descend Stairs: >                  |"
         "| Open Door     : Bump into +        |"
         "| Wait 1 Turn   : . or 5             |"
         "| Toggle Debug  : v                  |"
-        "| Quit Game     : q (or Q immediate) |"
+        "| Quit Game     : Q (confirm [y/n])  |"
         "| Close Help    : ESC / ? / Space    |"
         "+------------------------------------+"
     )
@@ -323,9 +324,11 @@ render_inventory() {
             lines+=("| $(pad_right "$entry" 39) |")
         done
     fi
+    local footer="| [1-9] Use/Equip    [ESC/i/Space] Resume |"
+    [[ "${UI_MODE:-}" == "drop" ]] && footer="| [1-9] Drop Item    [ESC/d/Space] Resume |"
     lines+=(
         "|-----------------------------------------|"
-        "| [1-9] Use/Equip    [ESC/i/Space] Resume |"
+        "$footer"
         "+-----------------------------------------+"
     )
     local box_h=${#lines[@]} box_w=${#lines[0]}
@@ -552,6 +555,45 @@ use_inventory_item() {
     return 0
 }
 
+drop_inventory_item() {
+    local slot="${1:-0}"
+    local idx=$(( slot - 1 ))
+    if (( idx < 0 || idx >= ${#INVENTORY[@]} )); then
+        LOG="No item in slot [$slot]."
+        return 1
+    fi
+    if [[ -n "${ENTITIES["$PX,$PY"]:-}" ]]; then
+        LOG="There is already something on the floor here."
+        UI_MODE=""
+        return 1
+    fi
+    local key="${INVENTORY[$idx]}"
+    ENTITIES["$PX,$PY"]="$key"
+    INVENTORY=("${INVENTORY[@]:0:$idx}" "${INVENTORY[@]:$((idx + 1))}")
+    ((LIGHT--))
+    LOG="Dropped $(item_desc "$key")."
+    UI_MODE=""
+    return 0
+}
+
+handle_search() {
+    local sx sy found=0
+    for ((sy = PY - 1; sy <= PY + 1; sy++)); do
+        for ((sx = PX - 1; sx <= PX + 1; sx++)); do
+            if [[ ${TRAPS["$sx,$sy"]:-0} == 1 ]]; then
+                TRAPS["$sx,$sy"]=2
+                ((found++))
+            fi
+        done
+    done
+    ((LIGHT--))
+    if (( found > 0 )); then
+        LOG="${YELLOW}You find a hidden trap!${RESET}"
+    else
+        LOG="Searching..."
+    fi
+}
+
 handle_descend() {
     local key="${ENTITIES["$PX,$PY"]:-}"
     if [[ "$key" != "S_stairs" ]]; then
@@ -584,10 +626,10 @@ run_game() {
                 e2=""
                 read -rsn1 -t 0.01 e2 || true
                 case "$e2" in
-                    A) key="w" ;;
-                    B) key="s" ;;
-                    C) key="d" ;;
-                    D) key="a" ;;
+                    A) key="k" ;;
+                    B) key="j" ;;
+                    C) key="l" ;;
+                    D) key="h" ;;
                     *) continue ;;
                 esac
             else
@@ -615,29 +657,42 @@ run_game() {
                     fi
                     render
                     ;;
-                ESC|i|' ') UI_MODE=""; LOG="Resumed."; render ;;
-                q|Q) break ;;
+                ESC|i|q|w|W|a|' ') UI_MODE=""; LOG="Resumed."; render ;;
+                Q) break ;;
+            esac
+            continue
+        elif [[ "$UI_MODE" == "drop" ]]; then
+            case "$key" in
+                [1-9])
+                    if drop_inventory_item "$key"; then
+                        move_enemies
+                    fi
+                    render
+                    ;;
+                ESC|d|' ') UI_MODE=""; LOG="Resumed."; render ;;
+                Q) break ;;
             esac
             continue
         fi
         processed=0; moved=0; nx=$PX; ny=$PY
         case "$key" in
-            w|k|8) ((ny--)); moved=1; processed=1 ;;
-            s|j|2) ((ny++)); moved=1; processed=1 ;;
-            a|h|4) ((nx--)); moved=1; processed=1 ;;
-            d|l|6) ((nx++)); moved=1; processed=1 ;;
-            y|7)   ((nx--)); ((ny--)); moved=1; processed=1 ;;
-            u|9)   ((nx++)); ((ny--)); moved=1; processed=1 ;;
-            b|1)   ((nx--)); ((ny++)); moved=1; processed=1 ;;
-            n|3)   ((nx++)); ((ny++)); moved=1; processed=1 ;;
-            ,) handle_pickup && move_enemies; render; continue ;;
-            i) UI_MODE="inventory"; LOG="INVENTORY: [1-9] Use/Equip  [ESC/i/Space] Resume"; render; continue ;;
+            k|8) ((ny--)); moved=1; processed=1 ;;
+            j|2) ((ny++)); moved=1; processed=1 ;;
+            h|4) ((nx--)); moved=1; processed=1 ;;
+            l|6) ((nx++)); moved=1; processed=1 ;;
+            y|7) ((nx--)); ((ny--)); moved=1; processed=1 ;;
+            u|9) ((nx++)); ((ny--)); moved=1; processed=1 ;;
+            b|1) ((nx--)); ((ny++)); moved=1; processed=1 ;;
+            n|3) ((nx++)); ((ny++)); moved=1; processed=1 ;;
+            s)   handle_search; move_enemies; processed=1 ;;
+            ,)   handle_pickup && move_enemies; render; continue ;;
+            i|q|w|W|a) UI_MODE="inventory"; LOG="INVENTORY: [1-9] Use/Equip  [ESC/i/Space] Resume"; render; continue ;;
+            d)   UI_MODE="drop"; LOG="DROP ITEM: [1-9] Drop  [ESC/d/Space] Resume"; render; continue ;;
             '>') handle_descend; render; continue ;;
             .|5) LOG="Waiting..."; move_enemies; ((LIGHT--)); processed=1 ;;
-            v) ((DEBUG = !DEBUG)); processed=1 ;;
-            ESC|'?') UI_MODE="help"; LOG="HELP: [q] Quit  [ESC/?/Space] Resume"; render; continue ;;
-            q) UI_MODE="confirm_quit"; LOG="${YELLOW}Really quit? [y/q] Yes  [n/ESC] Cancel${RESET}"; render; continue ;;
-            Q) break ;;
+            v)   ((DEBUG = !DEBUG)); processed=1 ;;
+            ESC|'?') UI_MODE="help"; LOG="HELP: [Q] Quit  [ESC/?/Space] Resume"; render; continue ;;
+            Q)   UI_MODE="confirm_quit"; LOG="${YELLOW}Really quit? [y/Q] Yes  [n/ESC] Cancel${RESET}"; render; continue ;;
         esac
         if [[ $processed -eq 1 ]]; then
             if [[ $moved -eq 1 ]]; then

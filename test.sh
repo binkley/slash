@@ -306,6 +306,34 @@ fi
 assert_eq "${ENTITIES["6,3"]:-}" "m_159" "preserves item on floor when pack is full"
 assert_contains "$LOG" "Pack is full!" "logs full pack warning"
 
+# Dropping items ('d' -> drop_inventory_item) and searching for traps ('s' -> handle_search)
+setup_test_room 10 6
+INVENTORY=("!_160")
+if drop_inventory_item 2; then
+    fail "dropping an empty inventory slot returns 1"
+else
+    pass "dropping an empty inventory slot returns 1"
+fi
+ENTITIES["5,3"]="m_159"
+if drop_inventory_item 1; then
+    fail "dropping onto an occupied floor tile returns 1"
+else
+    pass "dropping onto an occupied floor tile returns 1"
+fi
+assert_eq "${#INVENTORY[@]}" "1" "preserves item in pack when floor tile is occupied"
+unset 'ENTITIES["5,3"]'
+drop_inventory_item 1
+assert_eq "${#INVENTORY[@]}:${ENTITIES["5,3"]:-}" "0:!_160" "drop_inventory_item places item on floor and removes from pack"
+
+setup_test_room 10 6
+handle_search
+assert_eq "$LOG" "Searching..." "handle_search logs 'Searching...' when no adjacent traps exist"
+TRAPS["6,4"]=1
+handle_search
+assert_eq "${TRAPS["6,4"]}" "2" "handle_search reveals adjacent hidden trap (state 1 -> 2) without damage"
+assert_eq "$HP" "20" "handle_search does not deal trap damage to player"
+assert_contains "$LOG" "You find a hidden trap!" "handle_search logs trap discovery"
+
 setup_test_room 10 6
 MAP_DATA[3]="#.....^..#"
 TRAPS["7,3"]=1
@@ -455,8 +483,8 @@ e2e_out="$(
             VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
             PX=2; PY=1
         }
-        # Send: Right arrow (\e[C) into closed door (+), "." to wait, "v" for debug, "Q" to quit
-        printf "\e[C.vQ" | run_game
+        # Send: Right arrow (\e[C) into closed door (+), "." to wait, "v" for debug, Ctrl-C (\x03) to quit
+        printf "\e[C.v\x03" | run_game
     '
 )"
 plain_e2e="$(strip_ansi "$e2e_out")"
@@ -482,8 +510,8 @@ e2e_diag_out="$(
         # "3" (numpad SE) moves from (3,1) to (4,2) onto sapphire potion;
         # "b" moves SW from (4,2) to (3,3);
         # "7" (numpad NW) moves from (3,3) back to (2,2);
-        # "5" (numpad wait) waits 1 turn; "Q" quits
-        printf "u3b75Q" | run_game
+        # "5" (numpad wait) waits 1 turn; Ctrl-C (\x03) quits
+        printf "u3b75\x03" | run_game
     '
 )"
 plain_diag="$(strip_ansi "$e2e_diag_out")"
@@ -491,7 +519,7 @@ assert_contains "$plain_diag" "LOG: You see ruby potion (? effect) here (press ,
 assert_contains "$plain_diag" "LOG: You see sapphire potion (? effect) here (press , to pick up)." "E2E numpad '3' moves diagonally SE onto (4,2)"
 assert_contains "$plain_diag" "Fuel: 95" "E2E diagonal steps (u, 3, b, 7) and numpad wait (5) consume 5 turns of fuel"
 
-# Context-sensitive <ESC>, Help menu, quit confirmation, and Ctrl-C (\x03)
+# Context-sensitive <ESC>, Help menu, quit confirmation ('Q'), and Ctrl-C (\x03)
 e2e_modal_out="$(
     bash -c '
         source "'"$SCRIPT_DIR"'/game.sh"
@@ -505,15 +533,15 @@ e2e_modal_out="$(
         }
         # 1. Bare ESC opens Help overlay
         # 2. Second ESC closes Help overlay ("Resumed.")
-        # 3. "q" opens quit confirmation ("Really quit?")
+        # 3. "Q" opens quit confirmation ("Really quit?")
         # 4. ESC cancels quit confirmation ("Resumed.")
         # 5. Ctrl-C (\x03) exits cleanly
-        printf "\e\eq\e\x03" | run_game
+        printf "\e\eQ\e\x03" | run_game
     '
 )"
 plain_modal="$(strip_ansi "$e2e_modal_out")"
 assert_contains "$plain_modal" "+------------ SLASH HELP ------------+" "Bare ESC in normal mode opens the SLASH HELP overlay"
-assert_contains "$plain_modal" "LOG: Really quit? [y/q] Yes  [n/ESC] Cancel" "Pressing 'q' in normal mode prompts for quit confirmation"
+assert_contains "$plain_modal" "LOG: Really quit? [y/Q] Yes  [n/ESC] Cancel" "Pressing 'Q' in normal mode prompts for quit confirmation"
 assert_contains "$plain_modal" "LOG: Resumed." "Pressing ESC cancels an active Help modal or quit prompt"
 
 e2e_help_quit="$(
@@ -527,21 +555,21 @@ e2e_help_quit="$(
             VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
             PX=2; PY=1
         }
-        # Open Help with "?" then press "q" to quit immediately, ignoring trailing "." wait
-        printf "?q." | run_game
+        # Open Help with "?" then press "Q" to quit immediately, ignoring trailing "." wait
+        printf "?Q." | run_game
     '
 )"
 plain_help_quit="$(strip_ansi "$e2e_help_quit")"
-assert_contains "$plain_help_quit" "HELP: [q] Quit  [ESC/?/Space] Resume" "Pressing '?' opens the Help overlay"
+assert_contains "$plain_help_quit" "HELP: [Q] Quit  [ESC/?/Space] Resume" "Pressing '?' opens the Help overlay"
 if [[ "$plain_help_quit" != *"LOG: Waiting..."* ]]; then
     ((PASS += 1))
-    printf '  \e[32m✓\e[0m %s\n' "Pressing 'q' inside Help menu exits immediately without processing trailing keys"
+    printf '  \e[32m✓\e[0m %s\n' "Pressing 'Q' inside Help menu exits immediately without processing trailing keys"
 else
     ((FAIL += 1))
-    printf '  \e[31m✗\e[0m %s\n' "Pressing 'q' inside Help menu exits immediately without processing trailing keys"
+    printf '  \e[31m✗\e[0m %s\n' "Pressing 'Q' inside Help menu exits immediately without processing trailing keys"
 fi
 
-# Interactive inventory modal ('i') and item identification ('1'..'9')
+# Interactive NetHack verbs: 'l' (East), ',' (pickup), 's' (search traps), 'd' (drop), 'q' (quaff)
 e2e_inv_out="$(
     bash -c '
         source "'"$SCRIPT_DIR"'/game.sh"
@@ -554,14 +582,16 @@ e2e_inv_out="$(
             IDENTIFIED=(); INVENTORY=()
             PX=2; PY=1; HP=12; MAX_HP=20
             ENTITIES["3,1"]="!_160"
+            TRAPS["4,1"]=1
         }
-        # Move right onto !_160 ("d"), pick up (","), open inventory ("i"), quaff slot 1 ("1"), quit ("Q")
-        printf "d,i1Q" | run_game
+        # Move East onto !_160 ("l"), pick up (","), search adjacent trap ("s"), open inventory/quaff ("q"), quaff slot 1 ("1"), quit ("\x03")
+        printf "l,sq1\x03" | run_game
     '
 )"
 plain_inv="$(strip_ansi "$e2e_inv_out")"
 assert_contains "$plain_inv" "LOG: Picked up ruby potion (? effect) [slot 1, press i]." "E2E ',' picks up unidentified potion into slot 1"
-assert_contains "$plain_inv" "+--------------- INVENTORY ---------------+" "E2E 'i' opens the INVENTORY overlay"
+assert_contains "$plain_inv" "LOG: You find a hidden trap!" "E2E 's' searches adjacent tiles and reveals hidden trap"
+assert_contains "$plain_inv" "+--------------- INVENTORY ---------------+" "E2E 'q' opens the INVENTORY overlay"
 assert_contains "$plain_inv" "[1] ruby potion (? effect)" "E2E INVENTORY overlay displays unidentified item label"
 assert_contains "$plain_inv" "LOG: Gulp! Potion of Healing (+10 HP)." "E2E pressing '1' in INVENTORY quaffs and identifies the potion"
 

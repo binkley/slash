@@ -38,15 +38,17 @@ To run directly on the host (requires Bash 4+):
 
 | Key | Action |
 | :--- | :--- |
-| `w` `a` `s` `d` / Arrow Keys / `h` `j` `k` `l` / Numpad `8` `4` `6` `2` | Move cardinally (4-way), bump-attack monsters, or open closed doors (`+`) |
+| `h` `j` `k` `l` / Arrow Keys / Numpad `4` `2` `8` `6` | Move cardinally (W, S, N, E), bump-attack monsters, or open closed doors (`+`) |
 | `y` `u` `b` `n` / Numpad `7` `9` `1` `3` | Move or attack diagonally (NW, NE, SW, SE) |
+| `s` | Search adjacent tiles for hidden dungeon traps (`x`) |
 | `,` | Pick up the item at your feet into your pack (gold is collected immediately) |
-| `i` | Open Inventory to use or equip carried items (`1`–`9` to select; identifies item type) |
+| `i` / `q` / `w` / `W` / `a` | Open Inventory to use, quaff, wield, wear, or apply carried items (`1`–`9` to select) |
+| `d` | Open Inventory to drop a carried item (`1`–`9` to select) onto the floor |
 | `>` | Descend staircase (`>`) to the next dungeon floor |
-| `.` / Numpad `5` | Wait a turn |
+| `.` / Numpad `5` | Wait / rest a turn |
 | `ESC` / `?` | Open Help menu (or cancel an active prompt/modal; `Space` also closes Help) |
-| `q` | Quit (prompts for confirmation `[y/n]`, or quits immediately from Help) |
-| `Q` / `Ctrl-C` | Quit immediately |
+| `Q` | Quit game (prompts for confirmation `[y/n]`, or quits immediately from Help) |
+| `Ctrl-C` | Quit immediately |
 | `v` | Toggle debug visibility |
 
 ### Map Symbols & Hazards
