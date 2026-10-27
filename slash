@@ -13,17 +13,281 @@ fi
 
 usage() {
     cat <<'EOF'
-Usage: ./slash [-t | -c | -b | -h]
+Usage: ./slash [-t | -c | -b | -s [file] | -h]
   (no args)  Build image (if needed) and launch slash in Docker
   -t         Run engine and ASCII UI test suite (./test.sh)
   -c         Run syntax checks (bash -n), shellcheck, and ./test.sh
   -b         Force rebuild of the Docker image (runs tests in container)
+  -s [file]  Render deterministic gameplay screenshot to SVG (default: screenshot.svg)
   -h         Show this help message
 EOF
 }
 
+xterm256_to_hex() {
+    local n=$1
+    if (( n < 16 )); then
+        case "$n" in
+            1|9)  printf '#ff5555' ;;
+            2|10) printf '#50fa7b' ;;
+            3|11) printf '#f1fa8c' ;;
+            4|12) printf '#5555ff' ;;
+            5|13) printf '#ff79c6' ;;
+            6|14) printf '#5fd7ff' ;;
+            *)    printf '#d4d4d4' ;;
+        esac
+    elif (( n < 232 )); then
+        local idx=$(( n - 16 ))
+        local r=$(( idx / 36 )) g=$(( (idx % 36) / 6 )) b=$(( idx % 6 ))
+        r=$(( r == 0 ? 0 : 55 + r * 40 ))
+        g=$(( g == 0 ? 0 : 55 + g * 40 ))
+        b=$(( b == 0 ? 0 : 55 + b * 40 ))
+        printf '#%02x%02x%02x' "$r" "$g" "$b"
+    else
+        local v=$(( 8 + (n - 232) * 10 ))
+        printf '#%02x%02x%02x' "$v" "$v" "$v"
+    fi
+}
+
+generate_screenshot() {
+    local out_file="${1:-screenshot.svg}"
+    local out_dir
+    out_dir="$(dirname "$out_file")"
+    if [[ ! -d "$out_dir" || ( -e "$out_file" && ! -w "$out_file" ) ]]; then
+        echo "Error: cannot write screenshot to '$out_file'" >&2
+        return 1
+    fi
+
+    # Load engine and stage a deterministic mid-dungeon encounter
+    # shellcheck source=game.sh
+    source "./$SCRIPT_FILE"
+    load_entities "./$CONFIG_FILE"
+
+    MAP_W=78
+    MAP_H=13
+    FLICKER=0
+    BASE_VIEW=13
+    VIEW_DIST=13
+    SENSE_DIST=9
+    LEVEL=2
+    FLOOR=2
+    MAX_HP=25
+    HP=18
+    LIGHT=84
+    WEAPON="Steel Blade"
+    ARMOR="Chainmail"
+    ATK=6
+    DEF=4
+    AC_BOOST=5
+    AC_TIMER=14
+    GOLD=45
+    DEBUG=0
+    UI_MODE=""
+    LOG="Hit Grunting Orc for 7 (7-0 AC). HP: 3. ${RED}Grunting Orc hits you for 1 dmg!${RESET}"
+
+    MAP_DATA=(
+        "##############################################################################"
+        "#.............#........#.......................#.............#...............#"
+        "#..#########..#..####..#....####...............#..#########..#...............#"
+        "#..#.......#..#..#...../....#..#.............../..#.......#..#...............#"
+        "#..#.......+..#..#.....######..#...............####.......+..#...............#"
+        "#..#.......#../................#..........................#..#...............#"
+        "#..#########..#######..#......./...........^^..############..#################"
+        "#...................#..#...................^^..#.............................#"
+        "#####.############..#..#....###................+.............................#"
+        "#................#..#.......###................#.............................#"
+        "#................+.............................#.............................#"
+        "#................#.............................#.............................#"
+        "##############################################################################"
+    )
+
+    VISITED=()
+    ENTITIES=()
+    TRAPS=()
+    CUR_MON_HP=()
+
+    # Mark western wing and upper-east ante-room as previously explored (fog of war)
+    local vx vy
+    for ((vy = 0; vy < MAP_H; vy++)); do
+        for ((vx = 0; vx < 26; vx++)); do
+            VISITED["$vx,$vy"]=1
+        done
+    done
+    for ((vy = 0; vy <= 6; vy++)); do
+        for ((vx = 47; vx < MAP_W; vx++)); do
+            VISITED["$vx,$vy"]=1
+        done
+    done
+
+    # Player in central cavern
+    PX=37
+    PY=6
+
+    # Active monsters & loot inside torchlight FOV + remembered monsters in fog of war
+    ENTITIES["8,3"]="k_236"       # Shadow Stalker remembered as '?' in visited west room
+    ENTITIES["54,3"]="G_244"      # Iron Golem remembered as '?' in visited north-east room
+    ENTITIES["38,6"]="E_196"      # Grunting Orc in melee range
+    CUR_MON_HP["38,6"]=3
+    ENTITIES["34,4"]="!_160"      # Potion of Healing (red !)
+    ENTITIES["41,4"]="!_111"      # Potion of Protection (blue !)
+    ENTITIES["44,8"]='$_220'      # Gold Nuggets ($) near lava
+    ENTITIES["33,8"]="t_208"      # Wooden Torch (t)
+    ENTITIES["36,10"]="S_255"     # Skeleton Warrior (S)
+    ENTITIES["41,10"]=")_213"     # Steel Blade ())
+    ENTITIES["44,3"]="D_160"      # Young Dragon (D)
+    ENTITIES["45,2"]="S_stairs"   # Stairs down (>)
+    TRAPS["35,7"]=2               # Triggered trap (x)
+
+    local raw
+    raw="$(render)"
+
+    # Parse ANSI frame into 2D cell buffer (60 cols x 16 rows)
+    local total_rows=$(( MAP_H + 3 ))
+    local -A CELL_CH CELL_FG CELL_BG
+    local r=0 c=0 fg="#d4d4d4" bg=""
+    local i=0 len=${#raw} ch seq code
+
+    while (( i < len )); do
+        ch="${raw:$i:1}"
+        if [[ "$ch" == $'\e' && "${raw:$((i + 1)):1}" == "[" ]]; then
+            seq=""
+            (( i += 2 ))
+            while (( i < len )); do
+                ch="${raw:$i:1}"
+                (( i++ ))
+                if [[ "$ch" =~ [A-Za-z] ]]; then
+                    break
+                fi
+                seq+="$ch"
+            done
+            case "$ch" in
+                H)
+                    if [[ -z "$seq" ]]; then
+                        r=0; c=0
+                    else
+                        r=$(( ${seq%;*} - 1 ))
+                        c=$(( ${seq#*;} - 1 ))
+                    fi
+                    ;;
+                K)
+                    local kc
+                    for ((kc = c; kc < MAP_W; kc++)); do
+                        unset 'CELL_CH["'"$r,$kc"'"]' 'CELL_FG["'"$r,$kc"'"]' 'CELL_BG["'"$r,$kc"'"]'
+                    done
+                    ;;
+                m)
+                    case "$seq" in
+                        0|"") fg="#d4d4d4"; bg="" ;;
+                        1) ;;
+                        31) fg="#ff5555" ;;
+                        32) fg="#50fa7b" ;;
+                        33) fg="#f1fa8c" ;;
+                        34) fg="#5555ff" ;;
+                        36) fg="#5fd7ff" ;;
+                        38\;5\;*)
+                            code="${seq#38;5;}"
+                            fg="$(xterm256_to_hex "$code")"
+                            ;;
+                        48\;5\;*)
+                            code="${seq#48;5;}"
+                            bg="$(xterm256_to_hex "$code")"
+                            ;;
+                    esac
+                    ;;
+            esac
+        elif [[ "$ch" == $'\r' ]]; then
+            c=0
+            (( i++ ))
+        elif [[ "$ch" == $'\n' ]]; then
+            (( r++ ))
+            (( i++ ))
+        else
+            if (( r >= 0 && r < total_rows && c >= 0 && c < MAP_W )); then
+                CELL_CH["$r,$c"]="$ch"
+                CELL_FG["$r,$c"]="$fg"
+                [[ -n "$bg" ]] && CELL_BG["$r,$c"]="$bg" || unset 'CELL_BG["'"$r,$c"'"]'
+            fi
+            (( c++ ))
+            (( i++ ))
+        fi
+    done
+
+    # Emit SVG
+    local cell_w=10 cell_h=20 pad_x=18 pad_top=48 pad_bot=16
+    local width=$(( MAP_W * cell_w + pad_x * 2 ))
+    local height=$(( total_rows * cell_h + pad_top + pad_bot ))
+
+    {
+        printf '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d">\n' "$width" "$height" "$width" "$height"
+        printf '  <rect width="%d" height="%d" rx="10" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>\n' "$width" "$height"
+        printf '  <path d="M 1 36 L %d 36" stroke="#21262d" stroke-width="1"/>\n' "$(( width - 1 ))"
+        printf '  <circle cx="20" cy="18" r="6" fill="#ff5f56"/>\n'
+        printf '  <circle cx="40" cy="18" r="6" fill="#ffbd2e"/>\n'
+        printf '  <circle cx="60" cy="18" r="6" fill="#27c93f"/>\n'
+        printf '  <text x="%d" y="23" text-anchor="middle" fill="#8b949e" font-family="ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace" font-size="13">slash — ./game.sh</text>\n' "$(( width / 2 ))"
+
+        # Background cell rects (e.g. lava tiles)
+        for ((r = 0; r < total_rows; r++)); do
+            for ((c = 0; c < MAP_W; c++)); do
+                local cell_bg="${CELL_BG["$r,$c"]:-}"
+                if [[ -n "$cell_bg" ]]; then
+                    local rx=$(( pad_x + c * cell_w ))
+                    local ry=$(( pad_top + r * cell_h ))
+                    printf '  <rect x="%d" y="%d" width="%d" height="%d" fill="%s"/>\n' "$rx" "$ry" "$cell_w" "$cell_h" "$cell_bg"
+                fi
+            done
+        done
+
+        # Subtle divider above HUD
+        local hud_y=$(( pad_top + MAP_H * cell_h - 2 ))
+        printf '  <line x1="%d" y1="%d" x2="%d" y2="%d" stroke="#21262d" stroke-width="1"/>\n' "$pad_x" "$hud_y" "$(( width - pad_x ))" "$hud_y"
+
+        # Foreground text rows with per-glyph x-coordinates grouped by color
+        printf '  <g font-family="ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace" font-size="15">\n'
+        for ((r = 0; r < total_rows; r++)); do
+            local ty=$(( pad_top + r * cell_h + 15 ))
+            local row_spans=""
+            local span_fg="" span_x="" span_text=""
+            for ((c = 0; c < MAP_W; c++)); do
+                local cell_ch="${CELL_CH["$r,$c"]:- }"
+                [[ "$cell_ch" == " " || -z "$cell_ch" ]] && continue
+                local cell_fg="${CELL_FG["$r,$c"]:-#d4d4d4}"
+                # Lift dim fog-of-war walls slightly for clear contrast on dark SVG background
+                [[ "$cell_fg" == "#303030" ]] && cell_fg="#3d4450"
+                local gx=$(( pad_x + c * cell_w ))
+                local esc_ch="$cell_ch"
+                case "$esc_ch" in
+                    '&') esc_ch='&amp;' ;;
+                    '<') esc_ch='&lt;' ;;
+                    '>') esc_ch='&gt;' ;;
+                esac
+                if [[ "$cell_fg" == "$span_fg" ]]; then
+                    span_x+=" $gx"
+                    span_text+="$esc_ch"
+                else
+                    if [[ -n "$span_text" ]]; then
+                        row_spans+="<tspan fill=\"$span_fg\" x=\"$span_x\">$span_text</tspan>"
+                    fi
+                    span_fg="$cell_fg"
+                    span_x="$gx"
+                    span_text="$esc_ch"
+                fi
+            done
+            if [[ -n "$span_text" ]]; then
+                row_spans+="<tspan fill=\"$span_fg\" x=\"$span_x\">$span_text</tspan>"
+            fi
+            if [[ -n "$row_spans" ]]; then
+                printf '    <text y="%d">%s</text>\n' "$ty" "$row_spans"
+            fi
+        done
+        printf '  </g>\n'
+        printf '</svg>\n'
+    } > "$out_file"
+
+    echo "Wrote $out_file (${width}x${height})"
+}
+
 FORCE_BUILD_ONLY=false
-while getopts ":tcbh" opt; do
+while getopts ":tcbsh" opt; do
     case "$opt" in
         t) exec ./test.sh ;;
         c)
@@ -34,6 +298,11 @@ while getopts ":tcbh" opt; do
             exec ./test.sh
             ;;
         b) FORCE_BUILD_ONLY=true ;;
+        s)
+            shift $((OPTIND - 1))
+            generate_screenshot "${1:-screenshot.svg}"
+            exit $?
+            ;;
         h) usage; exit 0 ;;
         *) usage >&2; exit 1 ;;
     esac

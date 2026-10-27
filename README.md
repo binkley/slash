@@ -14,6 +14,8 @@ torchlight, 256-color glyphs, and zero compiled dependencies.
 lives in a plain-text table ([`game.cfg`](game.cfg)), so you can invent new
 creatures and loot without touching a line of engine code.
 
+![slash gameplay screenshot](screenshot.svg)
+
 ## Quick Start
 
 Run the smart Docker launcher:
@@ -84,10 +86,11 @@ Use `-` for unused numeric columns.
 You can run checks and builds through either `./slash` flags or `make`:
 
 ```sh
-./slash         # or: make run    (build image if needed and launch game)
-./slash -t      # or: make test   (run engine + 2D ASCII UI test suite)
-./slash -c      # or: make check  (run bash -n, shellcheck, and ./test.sh)
-./slash -b      # or: make build  (force Docker image rebuild with test gate)
+./slash         # or: make run         (build image if needed and launch game)
+./slash -t      # or: make test        (run engine + 2D ASCII UI test suite)
+./slash -c      # or: make check       (run bash -n, shellcheck, and ./test.sh)
+./slash -b      # or: make build       (force Docker image rebuild with test gate)
+./slash -s      # or: make screenshot  (render deterministic screenshot.svg)
 ./slash -h      # show CLI options
 make lint       # run bash -n and shellcheck only
 make hooks      # configure git core.hooksPath -> .githooks

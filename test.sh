@@ -416,6 +416,21 @@ else
     printf '  \e[31m✗\e[0m %s\n' "Pressing 'q' inside Help menu exits immediately without processing trailing keys"
 fi
 
+echo "=== 6. Deterministic SVG Screenshot Generation ==="
+svg_tmp="$SCRIPT_DIR/.test-screenshot.svg"
+rm -f "$svg_tmp"
+svg_out="$("$SCRIPT_DIR/slash" -s "$svg_tmp" 2>&1)"
+assert_contains "$svg_out" "Wrote $svg_tmp" "generates SVG screenshot via ./slash -s"
+svg_content="$(<"$svg_tmp")"
+rm -f "$svg_tmp"
+assert_contains "$svg_content" "<svg xmlns=\"http://www.w3.org/2000/svg\"" "emits valid root <svg> element"
+assert_contains "$svg_content" ">@</tspan>" "renders player glyph (@) in SVG output"
+assert_contains "$svg_content" ">&gt;</tspan>" "escapes stairs glyph (>) as XML entity in SVG output"
+assert_contains "$svg_content" "GruntingOrchitsyoufor1dmg!" "renders full HUD combat log in SVG output"
+
+svg_err="$("$SCRIPT_DIR/slash" -s "/nonexistent_dir/screenshot.svg" 2>&1 || true)"
+assert_contains "$svg_err" "Error: cannot write screenshot" "fails cleanly when screenshot output directory does not exist"
+
 echo ""
 printf 'Summary: \e[32m%d passed\e[0m, \e[31m%d failed\e[0m\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

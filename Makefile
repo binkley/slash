@@ -1,4 +1,4 @@
-.PHONY: all check lint test build run hooks
+.PHONY: all check lint test build run screenshot hooks
 
 SCRIPTS := game.sh slash sprites test.sh
 
@@ -21,6 +21,9 @@ check: lint test
 
 build:
 	./slash -b
+
+screenshot:
+	./slash -s
 
 run:
 	./slash
