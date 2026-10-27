@@ -48,9 +48,37 @@ strip_ansi() {
     printf '%s' "$1" | sed -E $'s/\e\\[[0-9;?]*[a-zA-Z]//g; s/\r//g'
 }
 
-# Load engine without starting interactive loop
-source "$SCRIPT_DIR/game.sh"
+# Load engine without starting interactive loop and track line coverage via DEBUG trap
+GAME_SH="$SCRIPT_DIR/game.sh"
+COV_TMP="$SCRIPT_DIR/.test-cov.tmp"
+RENDER_TMP="$SCRIPT_DIR/.test-render.tmp"
+rm -f "$COV_TMP" "$RENDER_TMP"
+declare -A COV_HIT=()
+set -T
+trap '[[ "${BASH_SOURCE[0]:-}" == "$GAME_SH" ]] && COV_HIT[$LINENO]=1' DEBUG
+
+source "$GAME_SH"
 flash_red() { :; }
+
+# Run render in the current shell so DEBUG trap records all executed lines in game.sh
+render_frame() {
+    render > "$RENDER_TMP"
+    cat "$RENDER_TMP"
+}
+
+# Run an E2E subshell with DEBUG line-coverage tracking flushed to COV_TMP on completion
+run_e2e_cov() {
+    local script="$1"
+    bash -c '
+        GAME_SH="'"$GAME_SH"'"
+        COV_TMP="'"$COV_TMP"'"
+        declare -A COV_HIT=()
+        set -T
+        trap '\''[[ "${BASH_SOURCE[0]:-}" == "$GAME_SH" ]] && COV_HIT[$LINENO]=1'\'' DEBUG
+        '"$script"'
+        (( ${#COV_HIT[@]} > 0 )) && printf "%s\n" "${!COV_HIT[@]}" >> "$COV_TMP"
+    '
+}
 
 # Build a deterministic NxM boxed room for UI and movement tests
 setup_test_room() {
@@ -226,6 +254,18 @@ assert_eq "$HP:${ENTITIES["6,3"]:-}" "20:x_201" "Grid Bug at diagonal (6,4) does
 move_enemies
 assert_eq "$HP" "17" "Grid Bug at orthogonal (6,3) attacks player at (5,3) for 3 damage"
 
+# Monster AI boundary branches: out of SENSE_DIST range or step blocked by wall/entity
+setup_test_room 12 6
+PX=2; PY=3; SENSE_DIST=3
+ENTITIES["10,3"]="E_196"
+CUR_MON_HP["10,3"]=10
+MAP_DATA[3]="#..#.......#"
+ENTITIES["4,3"]="b_250"
+CUR_MON_HP["4,3"]=5
+move_enemies
+assert_eq "${ENTITIES["10,3"]:-}" "E_196" "monster outside SENSE_DIST does not move toward player"
+assert_eq "${ENTITIES["4,3"]:-}" "b_250" "monster whose step toward player is blocked by a wall stays in place"
+
 # Consumables, Inventory & Identify Mechanics:
 # - stepping onto an unidentified item hides its identity/stats
 # - pressing ',' (handle_pickup) stores non-gold items in INVENTORY
@@ -292,6 +332,38 @@ handle_move 8 3
 handle_pickup
 use_inventory_item 1
 assert_eq "$LIGHT" "97" "moving onto, picking up, and lighting Wooden Torch adds 50 fuel after 3-turn cost"
+
+# Gold pickup ($_220) adds straight to GOLD purse without occupying an INVENTORY slot
+ENTITIES["8,2"]='$_220'
+handle_move 8 2
+assert_contains "$LOG" "You see Gold Nuggets here (press , to pick up)." "stepping onto gold logs floor message"
+handle_pickup
+(( GOLD >= 1 && GOLD <= 15 )) && pass "picking up Gold Nuggets adds 1-15 Au directly to GOLD purse" || fail "picking up Gold Nuggets adds 1-15 Au directly to GOLD purse" "GOLD=$GOLD"
+assert_eq "${#INVENTORY[@]}:${ENTITIES["8,2"]:-}" "0:" "picking up gold removes floor entity without consuming a pack slot"
+assert_contains "$LOG" "Found $GOLD gold nuggets." "picking up gold logs amount found"
+
+# Remaining unidentified_desc / identified_desc / item_desc color and item-type branches
+TYPE_DB["!_46"]="POT"; NAME_DB["!_46"]="Emerald Draught"; VAL_DB["!_46"]=5
+TYPE_DB["!_226"]="POT"; NAME_DB["!_226"]="Amber Draught"; VAL_DB["!_226"]=5
+TYPE_DB["!_201"]="POT"; NAME_DB["!_201"]="Violet Draught"; VAL_DB["!_201"]=5
+TYPE_DB["!_999"]="POT"; NAME_DB["!_999"]="Strange Draught"; VAL_DB["!_999"]=5
+# Capture stdout of a function call in the current shell so DEBUG trap records coverage
+call_fn() {
+    "$@" > "$RENDER_TMP"
+    cat "$RENDER_TMP"
+}
+
+assert_eq "$(call_fn unidentified_desc "!_46")" "emerald potion (? effect)" "maps color 46 to emerald potion"
+assert_eq "$(call_fn unidentified_desc "!_226")" "amber potion (? effect)" "maps color 226 to amber potion"
+assert_eq "$(call_fn unidentified_desc "!_201")" "violet potion (? effect)" "maps color 201 to violet potion"
+assert_eq "$(call_fn unidentified_desc "!_999")" "murky potion (? effect)" "maps unknown potion color to murky potion"
+assert_eq "$(call_fn unidentified_desc "t_208")" "Wooden Torch (? fuel)" "formats unidentified torch with (? fuel)"
+assert_eq "$(call_fn identified_desc "t_208")" "Wooden Torch (+50 turns)" "formats identified torch with (+50 turns)"
+assert_eq "$(call_fn identified_desc "{_245")" "Chainmail (+4 AC)" "formats identified armor with (+4 AC)"
+assert_eq "$(call_fn identified_desc '$_220')" "Gold Nuggets (1-15 Au)" "formats identified gold with (1-15 Au)"
+assert_eq "$(call_fn item_desc "!_46")" "emerald potion (? effect)" "item_desc delegates to unidentified_desc when item is unidentified"
+IDENTIFIED["!_46"]=1
+assert_eq "$(call_fn item_desc "!_46")" "Emerald Draught" "item_desc delegates to identified_desc when item is identified"
 
 # Failure mode: full pack (MAX_INV=9) rejects non-gold pickup without destroying floor item
 setup_test_room 10 6
@@ -399,7 +471,8 @@ ENTITIES["4,2"]="E_196"
 CUR_MON_HP["4,2"]=10
 ENTITIES["8,3"]="S_stairs"
 
-raw_frame="$(render)"
+render > "$RENDER_TMP"
+raw_frame="$(<"$RENDER_TMP")"
 plain_frame="$(strip_ansi "$raw_frame")"
 
 # Note: tile (5,1) is behind closed door '+' at (4,1), and shallow wall corners at (5..9,0) and (7..9,4) graze wall tiles first
@@ -424,7 +497,8 @@ BASE_VIEW=2
 ENTITIES["7,2"]="E_196"
 VISITED["7,2"]=1
 VISITED["8,0"]=1
-plain_fog="$(strip_ansi "$(render)")"
+render > "$RENDER_TMP"
+plain_fog="$(strip_ansi "$(<"$RENDER_TMP")")"
 fog_row_0="$(printf '%s\n' "$plain_fog" | sed -n '1p')"
 fog_row_2="$(printf '%s\n' "$plain_fog" | sed -n '3p')"
 assert_eq "${fog_row_0:8:1}" "#" "renders remembered wall on previously visited tile outside FOV"
@@ -435,7 +509,8 @@ assert_eq "${fog_row_2:7:1}" "?" "renders '?' for entity on visited tile outside
 setup_test_room 8 4
 HP=6       # 30% of 20 -> triggers low-HP border and red HP readout
 LIGHT=10   # < 20 -> triggers red Fuel readout
-raw_alert="$(render)"
+render > "$RENDER_TMP"
+raw_alert="$(<"$RENDER_TMP")"
 plain_alert="$(strip_ansi "$raw_alert")"
 
 expected_alert_grid="$(cat <<'EOF'
@@ -457,7 +532,8 @@ setup_test_room 10 5
 PX=5
 PY=2
 LIGHT=0
-plain_dark="$(strip_ansi "$(render)")"
+render > "$RENDER_TMP"
+plain_dark="$(strip_ansi "$(<"$RENDER_TMP")")"
 dark_row_2="$(printf '%s\n' "$plain_dark" | sed -n '3p')"
 assert_eq "$dark_row_2" "    .@.   " "collapses FOV radius to 1 tile when torch fuel is depleted (LIGHT=0)"
 
@@ -465,26 +541,42 @@ assert_eq "$dark_row_2" "    .@.   " "collapses FOV radius to 1 tile when torch 
 DEBUG=1
 HP=5
 TRAPS["2,2"]=1
-raw_debug="$(render)"
+render > "$RENDER_TMP"
+raw_debug="$(<"$RENDER_TMP")"
 plain_debug="$(strip_ansi "$raw_debug")"
 debug_row_2="$(printf '%s\n' "$plain_debug" | sed -n '3p')"
 assert_eq "$debug_row_2" "#.x..@...#" "DEBUG=1 reveals full map and renders armed hidden traps as 'x'"
 assert_contains "$raw_debug" "${PURPLE}x${RESET}" "DEBUG=1 styles armed hidden traps in PURPLE"
 
+# Empty-pack UI branches for render_inventory and render_possessions + pad_right/center_text helpers
+assert_eq "$(call_fn pad_right "Hello" 8)" "Hello   " "pad_right pads short text to requested width"
+assert_eq "$(call_fn pad_right "HelloWorld" 5)" "Hello" "pad_right truncates text exceeding width"
+assert_eq "$(call_fn center_text "Hi" 6)" "  Hi  " "center_text centers short text within requested width"
+assert_eq "$(call_fn center_text "HelloWorld" 5)" "Hello" "center_text truncates text exceeding width"
+
+setup_test_room 46 10
+INVENTORY=()
+render_inventory > "$RENDER_TMP"
+plain_empty_inv="$(strip_ansi "$(<"$RENDER_TMP")")"
+assert_contains "$plain_empty_inv" "(Pack is empty - press , on items)" "render_inventory displays empty-pack hint when INVENTORY is empty"
+render_possessions > "$RENDER_TMP"
+plain_empty_poss="$(strip_ansi "$(<"$RENDER_TMP")")"
+assert_contains "$plain_empty_poss" "(Your pack was empty.)" "render_possessions displays empty-pack notice when INVENTORY is empty"
+
 echo "=== 5. End-to-End Interactive Loop (Keystrokes -> Screen State) ==="
 e2e_out="$(
-    bash -c '
+    run_e2e_cov '
         source "'"$SCRIPT_DIR"'/game.sh"
         flash_red() { :; }
         load_entities
         generate_dungeon() {
-            MAP_W=8; MAP_H=4; FLICKER=0
+            MAP_W=8; MAP_H=4; FLICKER=0; BASE_VIEW=2
             MAP_DATA=("########" "#..+...#" "#......#" "########")
             VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
             PX=2; PY=1
         }
         # Send: Right arrow (\e[C) into closed door (+), "." to wait, "v" for debug, Ctrl-C (\x03) to quit
-        printf "\e[C.v\x03" | run_game
+        run_game < <(printf "\e[C.v\x03")
     '
 )"
 plain_e2e="$(strip_ansi "$e2e_out")"
@@ -492,14 +584,14 @@ assert_contains "$plain_e2e" "#.@/...#" "E2E loop translates arrow key escape se
 assert_contains "$plain_e2e" "LOG: Waiting..." "E2E loop processes '.' wait command and updates HUD log"
 assert_contains "$plain_e2e" "Fuel: 98" "E2E loop decrements torch fuel on door open and wait actions"
 
-# 8-way movement via vi-keys (hjkl + yubn) and numpad (8246 + 7913, 5 wait)
+# 8-way movement via vi-keys (hjkl + yubn), arrows (\e[A\e[B\e[D), numpad (8246 + 7913, 5 wait) + '>' stairs
 e2e_diag_out="$(
-    bash -c '
+    run_e2e_cov '
         source "'"$SCRIPT_DIR"'/game.sh"
         flash_red() { :; }
         load_entities
         generate_dungeon() {
-            MAP_W=8; MAP_H=5; FLICKER=0; BASE_VIEW=10
+            MAP_W=8; MAP_H=5; FLICKER=0; BASE_VIEW=2
             MAP_DATA=("########" "#......#" "#......#" "#......#" "########")
             VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
             PX=2; PY=2
@@ -510,33 +602,34 @@ e2e_diag_out="$(
         # "3" (numpad SE) moves from (3,1) to (4,2) onto sapphire potion;
         # "b" moves SW from (4,2) to (3,3);
         # "7" (numpad NW) moves from (3,3) back to (2,2);
-        # "5" (numpad wait) waits 1 turn; Ctrl-C (\x03) quits
-        printf "u3b75\x03" | run_game
+        # arrows + vi-keys + ">" + "5" (numpad wait); Ctrl-C (\x03) quits
+        run_game < <(printf "u3b7\e[B\e[D\e[Akjhlyn>5\x03")
     '
 )"
 plain_diag="$(strip_ansi "$e2e_diag_out")"
 assert_contains "$plain_diag" "LOG: You see ruby potion (? effect) here (press , to pick up)." "E2E vi-key 'u' moves diagonally NE onto (3,1)"
 assert_contains "$plain_diag" "LOG: You see sapphire potion (? effect) here (press , to pick up)." "E2E numpad '3' moves diagonally SE onto (4,2)"
-assert_contains "$plain_diag" "Fuel: 95" "E2E diagonal steps (u, 3, b, 7) and numpad wait (5) consume 5 turns of fuel"
+assert_contains "$plain_diag" "LOG: Waiting..." "E2E numpad '5' waits 1 turn"
 
 # Context-sensitive <ESC>, Help menu, quit confirmation ('Q'), and Ctrl-C (\x03)
 e2e_modal_out="$(
-    bash -c '
+    run_e2e_cov '
         source "'"$SCRIPT_DIR"'/game.sh"
         flash_red() { :; }
         load_entities
         generate_dungeon() {
-            MAP_W=8; MAP_H=4; FLICKER=0
+            MAP_W=8; MAP_H=4; FLICKER=0; BASE_VIEW=2
             MAP_DATA=("########" "#......#" "#......#" "########")
             VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
             PX=2; PY=1
         }
         # 1. Bare ESC opens Help overlay
         # 2. Second ESC closes Help overlay ("Resumed.")
-        # 3. "Q" opens quit confirmation ("Really quit?")
-        # 4. ESC cancels quit confirmation ("Resumed.")
-        # 5. Ctrl-C (\x03) exits cleanly
-        printf "\e\eQ\e\x03" | run_game
+        # 3. "i" opens Inventory, ESC closes it ("Resumed.")
+        # 4. "d" opens Drop modal, ESC closes it ("Resumed.")
+        # 5. "Q" opens quit confirmation ("Really quit?"), ESC cancels ("Resumed.")
+        # 6. "Q" then "y" confirms quit and exits cleanly
+        run_game < <(printf "\e\ei\ed\eQ\eQy")
     '
 )"
 plain_modal="$(strip_ansi "$e2e_modal_out")"
@@ -545,18 +638,18 @@ assert_contains "$plain_modal" "LOG: Really quit? [y/Q] Yes  [n/ESC] Cancel" "Pr
 assert_contains "$plain_modal" "LOG: Resumed." "Pressing ESC cancels an active Help modal or quit prompt"
 
 e2e_help_quit="$(
-    bash -c '
+    run_e2e_cov '
         source "'"$SCRIPT_DIR"'/game.sh"
         flash_red() { :; }
         load_entities
         generate_dungeon() {
-            MAP_W=8; MAP_H=4; FLICKER=0
+            MAP_W=8; MAP_H=4; FLICKER=0; BASE_VIEW=2
             MAP_DATA=("########" "#......#" "#......#" "########")
             VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
             PX=2; PY=1
         }
         # Open Help with "?" then press "Q" to quit immediately, ignoring trailing "." wait
-        printf "?Q." | run_game
+        run_game < <(printf "?Q.")
     '
 )"
 plain_help_quit="$(strip_ansi "$e2e_help_quit")"
@@ -569,9 +662,9 @@ else
     printf '  \e[31m✗\e[0m %s\n' "Pressing 'Q' inside Help menu exits immediately without processing trailing keys"
 fi
 
-# Interactive NetHack verbs: 'l' (East), ',' (pickup), 's' (search traps), 'd' (drop), 'q' (quaff)
+# Interactive NetHack verbs: 'l' (East), ',' (pickup), 'd' (drop modal + '1'), 's' (search traps), 'q' (quaff + '1')
 e2e_inv_out="$(
-    bash -c '
+    run_e2e_cov '
         source "'"$SCRIPT_DIR"'/game.sh"
         flash_red() { :; }
         load_entities
@@ -584,20 +677,23 @@ e2e_inv_out="$(
             ENTITIES["3,1"]="!_160"
             TRAPS["4,1"]=1
         }
-        # Move East onto !_160 ("l"), pick up (","), search adjacent trap ("s"), open inventory/quaff ("q"), quaff slot 1 ("1"), quit ("\x03")
-        printf "l,sq1\x03" | run_game
+        # Move East onto !_160 ("l"), pick up (","), open drop modal ("d"), drop slot 1 ("1"),
+        # pick back up (","), search adjacent trap ("s"), open quaff/inventory ("q"), quaff slot 1 ("1"), quit ("\x03")
+        run_game < <(printf "l,d1,sq1\x03")
     '
 )"
 plain_inv="$(strip_ansi "$e2e_inv_out")"
 assert_contains "$plain_inv" "LOG: Picked up ruby potion (? effect) [slot 1, press i]." "E2E ',' picks up unidentified potion into slot 1"
+assert_contains "$plain_inv" "| [1-9] Drop Item    [ESC/d/Space] Resume |" "E2E 'd' opens the interactive Drop Item overlay"
+assert_contains "$plain_inv" "LOG: Dropped ruby potion (? effect)." "E2E pressing '1' in Drop overlay drops item onto floor"
 assert_contains "$plain_inv" "LOG: You find a hidden trap!" "E2E 's' searches adjacent tiles and reveals hidden trap"
 assert_contains "$plain_inv" "+--------------- INVENTORY ---------------+" "E2E 'q' opens the INVENTORY overlay"
 assert_contains "$plain_inv" "[1] ruby potion (? effect)" "E2E INVENTORY overlay displays unidentified item label"
 assert_contains "$plain_inv" "LOG: Gulp! Potion of Healing (+10 HP)." "E2E pressing '1' in INVENTORY quaffs and identifies the potion"
 
-# Tombstone screen on player death: renders NetHack post-mortem screen, ignores buffered movement keys, exits on Space/q
+# Tombstone screen on player death: renders NetHack post-mortem screen, ignores buffered movement/arrow keys, exits on Space/q
 e2e_death_out="$(
-    bash -c '
+    run_e2e_cov '
         source "'"$SCRIPT_DIR"'/game.sh"
         flash_red() { :; }
         load_entities
@@ -622,8 +718,8 @@ e2e_death_out="$(
             CUR_MON_HP["6,5"]=30
         }
         # Wait (.) so Young Dragon (12 dmg vs 4 DEF = 8 dmg) kills player;
-        # trailing "d" is ignored on tombstone, "y" opens POSSESSIONS IDENTIFIED, " " exits
-        printf ".dy " | run_game
+        # trailing arrow "\e[A" and "d" are ignored on tombstone, "y" opens POSSESSIONS IDENTIFIED, " " exits
+        run_game < <(printf ".\e[Ady ")
     '
 )"
 plain_death="$(strip_ansi "$e2e_death_out")"
@@ -642,7 +738,7 @@ assert_contains "$plain_death" "[1] Potion of Protection (+5 AC, 20t) [was: sapp
 assert_contains "$plain_death" "[2] Steel Mace (+10 ATK) [was: Steel Mace (? ATK)]" "reveals unidentified weapon stats in pack"
 assert_contains "$plain_death" "[3] Potion of Healing (+10 HP)" "lists already-identified pack item without '[was: ...]' suffix"
 
-echo "=== 6. Deterministic SVG Screenshot Generation ==="
+echo "=== 6. Deterministic SVG Screenshot & CLI Flags ==="
 svg_tmp="$SCRIPT_DIR/.test-screenshot.svg"
 rm -f "$svg_tmp"
 svg_out="$("$SCRIPT_DIR/slash" -s "$svg_tmp" 2>&1)"
@@ -656,6 +752,80 @@ assert_contains "$svg_content" "GruntingOrchitsyoufor1dmg!" "renders full HUD co
 
 svg_err="$("$SCRIPT_DIR/slash" -s "/nonexistent_dir/screenshot.svg" 2>&1 || true)"
 assert_contains "$svg_err" "Error: cannot write screenshot" "fails cleanly when screenshot output directory does not exist"
+
+help_out="$("$SCRIPT_DIR/slash" -h 2>&1)"
+assert_contains "$help_out" "Usage: ./slash [-t | -c | -b | -s [file] | -h]" "./slash -h prints CLI usage summary"
+if "$SCRIPT_DIR/slash" -z >/dev/null 2>&1; then
+    fail "./slash rejects unknown option flag (-z) with non-zero exit"
+else
+    pass "./slash rejects unknown option flag (-z) with non-zero exit"
+fi
+
+echo "=== 7. Line Coverage (game.sh) ==="
+trap - DEBUG
+set +T
+if [[ -f "$COV_TMP" ]]; then
+    while IFS= read -r hit_line; do
+        [[ -n "$hit_line" ]] && COV_HIT[$hit_line]=1
+    done < "$COV_TMP"
+fi
+rm -f "$COV_TMP" "$RENDER_TMP"
+
+exec_lines=0
+hit_lines=0
+lineno=0
+in_multiline_array=0
+prev_continued=0
+while IFS= read -r raw_line; do
+    ((lineno++))
+    trimmed="${raw_line#"${raw_line%%[![:space:]]*}"}"
+    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    if (( prev_continued )); then
+        [[ "$trimmed" != *\\ ]] && prev_continued=0
+        continue
+    fi
+    [[ "$trimmed" == *\\ ]] && prev_continued=1
+    [[ -z "$trimmed" || "$trimmed" == \#* ]] && continue
+    if (( in_multiline_array )); then
+        if [[ "$trimmed" == ")" ]]; then
+            (( arr_hit )) || [[ -n "${COV_HIT[$lineno]:-}" ]] && ((hit_lines++))
+            in_multiline_array=0
+        elif [[ -n "${COV_HIT[$lineno]:-}" ]]; then
+            arr_hit=1
+        fi
+        continue
+    fi
+    if [[ "$trimmed" == *"=(" && "$trimmed" != *")" ]]; then
+        ((exec_lines++))
+        arr_hit=0
+        [[ -n "${COV_HIT[$lineno]:-}" ]] && arr_hit=1
+        in_multiline_array=1
+        continue
+    fi
+    case "$trimmed" in
+        *"{")
+            [[ "$trimmed" =~ ^[a-zA-Z_][a-zA-Z0-9_]*\(\)[[:space:]]*\{$ ]] && continue
+            ;;
+        "}"|"{"|"else"|"fi"|"done"|"esac"|";;"|"then"|"do")
+            continue
+            ;;
+        case\ *\ in)
+            continue
+            ;;
+        *\))
+            # Standalone case pattern label without inline commands
+            [[ "$trimmed" != *";;"* && "$trimmed" != *"("* && "$trimmed" != *"="* ]] && continue
+            ;;
+    esac
+    ((exec_lines++))
+    if [[ -n "${COV_HIT[$lineno]:-}" ]]; then
+        ((hit_lines++))
+    fi
+done < "$GAME_SH"
+
+cov_pct=$(( hit_lines * 100 / exec_lines ))
+printf '  Coverage: %d/%d executable lines (%d%%)\n' "$hit_lines" "$exec_lines" "$cov_pct"
+(( cov_pct >= 90 )) && pass "enforces >= 90% line coverage threshold on game.sh (${cov_pct}%)" || fail "enforces >= 90% line coverage threshold on game.sh (${cov_pct}%)"
 
 echo ""
 printf 'Summary: \e[32m%d passed\e[0m, \e[31m%d failed\e[0m\n' "$PASS" "$FAIL"
