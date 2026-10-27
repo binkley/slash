@@ -74,6 +74,9 @@ setup_test_room() {
     DEF=0
     AC_BOOST=0
     AC_TIMER=0
+    UI_MODE=""
+    DEATH_VERB=""
+    DEATH_BY=""
     LOG="Ready."
     MAP_DATA=()
     VISITED=()
@@ -264,6 +267,33 @@ assert_eq "$HP" "13" "stepping on armed trap deals 5 damage"
 assert_eq "${TRAPS["7,3"]}" "2" "stepping on armed trap reveals trap (state 2)"
 assert_contains "$LOG" "TRAP!" "stepping on trap logs trap warning"
 
+# Lethal damage records cause of death and clamps HP at 0
+setup_test_room 10 6
+HP=3
+ENTITIES["6,3"]="E_196"
+CUR_MON_HP["6,3"]=10
+move_enemies
+assert_eq "$HP:$DEATH_VERB:$DEATH_BY" "0:killed by a:Grunting Orc" "lethal monster hit clamps HP to 0 and records 'killed by a' / monster name"
+
+setup_test_room 10 6
+HP=5
+ENTITIES["6,3"]="G_244"
+CUR_MON_HP["6,3"]=40
+move_enemies
+assert_eq "$HP:$DEATH_VERB:$DEATH_BY" "0:killed by an:Iron Golem" "uses 'an' article for vowel-initial monster names"
+
+setup_test_room 10 6
+HP=2
+MAP_DATA[3]="#.....^..#"
+handle_move 6 3
+assert_eq "$HP:$DEATH_VERB:$DEATH_BY" "0:burned in:molten lava" "lethal lava step records 'burned in' / 'molten lava'"
+
+setup_test_room 10 6
+HP=4
+TRAPS["6,3"]=1
+handle_move 6 3
+assert_eq "$HP:$DEATH_VERB:$DEATH_BY" "0:killed by a:dungeon trap" "lethal trap step records 'killed by a' / 'dungeon trap'"
+
 # Stairs transition via '>' (handle_descend)
 setup_test_room 10 6
 if handle_descend; then
@@ -433,6 +463,45 @@ else
     ((FAIL += 1))
     printf '  \e[31m✗\e[0m %s\n' "Pressing 'q' inside Help menu exits immediately without processing trailing keys"
 fi
+
+# Tombstone screen on player death: renders NetHack post-mortem screen, ignores buffered movement keys, exits on Space/q
+e2e_death_out="$(
+    bash -c '
+        source "'"$SCRIPT_DIR"'/game.sh"
+        flash_red() { :; }
+        load_entities
+        PLAYER_NAME="Hero"
+        DEATH_YEAR="2026"
+        generate_dungeon() {
+            MAP_W=80; MAP_H=19; FLICKER=0
+            local wall_row floor_row y
+            wall_row=$(printf "%80s" | tr " " "#")
+            floor_row="#$(printf "%78s" | tr " " ".")#"
+            MAP_DATA=()
+            for ((y=0; y<19; y++)); do
+                (( y == 0 || y == 18 )) && MAP_DATA[$y]="$wall_row" || MAP_DATA[$y]="$floor_row"
+            done
+            VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
+            PX=5; PY=5
+            HP=2; MAX_HP=25; LEVEL=3; FLOOR=3; GOLD=77
+            WEAPON="Steel Blade"; ARMOR="Chainmail"; ATK=6; DEF=4
+            ENTITIES["6,5"]="D_160"
+            CUR_MON_HP["6,5"]=30
+        }
+        # Wait (.) so Young Dragon (12 dmg vs 4 DEF = 8 dmg) kills player; trailing "d" is ignored on tombstone, " " exits
+        printf ".d " | run_game
+    '
+)"
+plain_death="$(strip_ansi "$e2e_death_out")"
+assert_contains "$plain_death" "/    REST    \\" "renders classic NetHack REST / IN / PEACE headstone arch"
+assert_contains "$plain_death" "|       Hero       |" "renders centered player name on headstone"
+assert_contains "$plain_death" "|      77 Au       |" "renders gold in Au on headstone"
+assert_contains "$plain_death" "|   killed by a    |" "renders cause-of-death verb line on headstone"
+assert_contains "$plain_death" "|   Young Dragon   |" "renders killer name on headstone"
+assert_contains "$plain_death" "Goodbye Hero the Level 3 Adventurer..." "renders NetHack post-mortem Goodbye summary"
+assert_contains "$plain_death" "You died in The Dungeons of SLASH on dungeon level 3 with 77 Au." "renders dungeon level and Au in post-mortem summary"
+assert_contains "$plain_death" "You were wielding Steel Blade (ATK 6) and wearing Chainmail (AC 4) with 25 max HP" "renders equipment and max HP in post-mortem summary"
+assert_contains "$plain_death" "when you were killed by a Young Dragon." "renders full cause of death sentence in post-mortem summary"
 
 echo "=== 6. Deterministic SVG Screenshot Generation ==="
 svg_tmp="$SCRIPT_DIR/.test-screenshot.svg"

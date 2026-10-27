@@ -17,7 +17,7 @@ COL_STAIRS=$'\e[38;5;51m'; COL_GOLD=$'\e[38;5;220m'
 BASE_VIEW=7; VIEW_DIST=7; SENSE_DIST=9
 MAX_HP=20; HP=20; GOLD=0; FLOOR=1; LEVEL=1; LOG="game.cfg loaded."
 LIGHT=100; DEBUG=0; WEAPON="Fists"; ARMOR="Rags"; ATK=2; DEF=0
-AC_BOOST=0; AC_TIMER=0; UI_MODE=""
+AC_BOOST=0; AC_TIMER=0; UI_MODE=""; DEATH_VERB=""; DEATH_BY=""
 
 cleanup() { stty sane 2>/dev/null; echo -ne "$WRAP_ON$ALT_OFF$CUR_SHOW"; }
 MAP_W=$(tput cols 2>/dev/null || echo 80); MAP_H=$(( $(tput lines 2>/dev/null || echo 24) - 5 ))
@@ -133,10 +133,21 @@ move_enemies() {
             local total_def=$(( DEF + AC_BOOST ))
 
             if (( abs_dx <= 1 && abs_dy <= 1 )); then
-                local edmg=$(( DMG_DB["$key"] - total_def ))
-                (( edmg < 0 )) && edmg=0
-                (( edmg > 0 )) && flash_red; ((HP -= edmg))
-                LOG="${LOG:+$LOG }${RED}${NAME_DB["$key"]} hits you for $edmg dmg!${RESET}"
+                if (( HP > 0 )); then
+                    local edmg=$(( DMG_DB["$key"] - total_def ))
+                    (( edmg < 0 )) && edmg=0
+                    (( edmg > 0 )) && flash_red; ((HP -= edmg))
+                    if (( HP <= 0 )); then
+                        HP=0
+                        if [[ -z "${DEATH_BY:-}" ]]; then
+                            local article="a"
+                            [[ "${NAME_DB["$key"]}" =~ ^[AEIOUaeiou] ]] && article="an"
+                            DEATH_VERB="killed by $article"
+                            DEATH_BY="${NAME_DB["$key"]}"
+                        fi
+                    fi
+                    LOG="${LOG:+$LOG }${RED}${NAME_DB["$key"]} hits you for $edmg dmg!${RESET}"
+                fi
                 NEW_ENTITIES["$pos"]="$key"; NEW_MON_HP["$pos"]="${CUR_MON_HP["$pos"]}"
             elif (( abs_dx*abs_dx + abs_dy*abs_dy < SENSE_DIST * SENSE_DIST )); then
                 local nx=$ex ny=$ey
@@ -153,6 +164,10 @@ move_enemies() {
 }
 
 render() {
+    if (( HP <= 0 )) || [[ "${UI_MODE:-}" == "tombstone" ]]; then
+        render_tombstone
+        return
+    fi
     local frame=$'\e[H'; local percent=$(( HP * 100 / MAX_HP ))
     local hp_col=$GREEN; (( percent <= 30 )) && hp_col=$RED; (( percent <= 70 && percent > 30 )) && hp_col=$YELLOW
     if (( LIGHT > 0 )); then VIEW_DIST=$(( ${FLICKER:-1} ? BASE_VIEW + (RANDOM % 3) - 1 : BASE_VIEW )); local light_col=$YELLOW; (( LIGHT < 20 )) && light_col=$RED
@@ -217,6 +232,78 @@ render_help() {
     done
 }
 
+center_text() {
+    local text="$1" width="${2:-30}"
+    (( ${#text} > width )) && text="${text:0:$width}"
+    local pad_left=$(( (width - ${#text}) / 2 ))
+    local pad_right=$(( width - ${#text} - pad_left ))
+    printf "%*s%s%*s" "$pad_left" "" "$text" "$pad_right" ""
+}
+
+render_tombstone() {
+    local who="${PLAYER_NAME:-${USER:-Adventurer}}"
+    local verb="${DEATH_VERB:-killed by}"
+    local by="${DEATH_BY:-the dungeon}"
+    local year="${DEATH_YEAR:-$(date +%Y)}"
+    local total_def=$(( DEF + AC_BOOST ))
+    local c_who c_au c_verb c_by c_year
+    c_who="$(center_text "$who" 18)"
+    c_au="$(center_text "${GOLD} Au" 18)"
+    c_verb="$(center_text "$verb" 18)"
+    c_by="$(center_text "$by" 18)"
+    c_year="$(center_text "$year" 18)"
+
+    local stone=(
+        '               ----------               '
+        '              /          \              '
+        '             /    REST    \             '
+        '            /      IN      \            '
+        '           /     PEACE      \           '
+        '          /                  \          '
+        "          |${c_who}|          "
+        "          |${c_au}|          "
+        "          |${c_verb}|          "
+        "          |${c_by}|          "
+        "          |${c_year}|          "
+        '         *|     *  *  *      | *        '
+        '_________)/\_//(\/(/\)/\//\/\|_)________'
+    )
+    local epitaph=(
+        "Goodbye ${who} the Level ${LEVEL} Adventurer..."
+        "You died in The Dungeons of SLASH on dungeon level ${FLOOR} with ${GOLD} Au."
+        "You were wielding ${WEAPON} (ATK ${ATK}) and wearing ${ARMOR} (AC ${total_def}) with ${MAX_HP} max HP"
+        "when you were ${verb} ${by}."
+        ""
+        "[Press Space, Enter, ESC, or q to exit]"
+    )
+
+    echo -ne "$CLR"
+    local box_w=${#stone[0]}
+    local start_x=$(( (MAP_W - box_w) / 2 + 1 ))
+    (( start_x < 1 )) && start_x=1
+    local total_h=$(( ${#stone[@]} + 1 + ${#epitaph[@]} ))
+    local start_y=$(( (MAP_H + 3 - total_h) / 2 + 1 ))
+    (( start_y < 1 )) && start_y=1
+
+    local i row_y
+    for ((i=0; i<${#stone[@]}; i++)); do
+        row_y=$(( start_y + i ))
+        local col="$COL_WALL_LIT"
+        (( i == ${#stone[@]} - 1 )) && col="$GREEN"
+        printf '\e[%d;%dH%s%s%s' "$row_y" "$start_x" "$col" "${stone[$i]}" "$RESET"
+    done
+
+    local ep_base=$(( start_y + ${#stone[@]} + 1 ))
+    for ((i=0; i<${#epitaph[@]}; i++)); do
+        local line="${epitaph[$i]}"
+        local ep_x=$(( (MAP_W - ${#line}) / 2 + 1 ))
+        (( ep_x < 1 )) && ep_x=1
+        local ep_col="$RESET"
+        (( i == ${#epitaph[@]} - 1 )) && ep_col="$YELLOW"
+        printf '\e[%d;%dH%s%s%s' $((ep_base + i)) "$ep_x" "$ep_col" "$line" "$RESET"
+    done
+}
+
 handle_move() {
     local nx=$1 ny=$2; local key="${ENTITIES["$nx,$ny"]:-}"; local type=""
     [[ -n "$key" ]] && type="${TYPE_DB["$key"]:-}"
@@ -237,8 +324,14 @@ handle_move() {
     fi
     PX=$nx; PY=$ny
     local tile="${MAP_DATA[$PY]:$PX:1}"
-    if [[ "$tile" == "^" ]]; then flash_red; ((HP -= 2)); LOG="${RED}Lava burns!${RESET}"; fi
-    if [[ ${TRAPS["$PX,$PY"]:-0} == 1 ]]; then flash_red; ((HP -= 5)); TRAPS["$PX,$PY"]=2; LOG="${RED}TRAP!${RESET}"; fi
+    if [[ "$tile" == "^" ]]; then
+        flash_red; ((HP -= 2)); LOG="${RED}Lava burns!${RESET}"
+        if (( HP <= 0 )); then HP=0; [[ -z "${DEATH_BY:-}" ]] && { DEATH_VERB="burned in"; DEATH_BY="molten lava"; }; fi
+    fi
+    if [[ ${TRAPS["$PX,$PY"]:-0} == 1 ]]; then
+        flash_red; ((HP -= 5)); TRAPS["$PX,$PY"]=2; LOG="${RED}TRAP!${RESET}"
+        if (( HP <= 0 )); then HP=0; [[ -z "${DEATH_BY:-}" ]] && { DEATH_VERB="killed by a"; DEATH_BY="dungeon trap"; }; fi
+    fi
     if [[ "$key" == "S_stairs" ]]; then
         LOG="Stairs down here (press > to descend)."
     elif [[ -n "$key" && -n "${NAME_DB["$key"]:-}" ]]; then
@@ -350,12 +443,28 @@ run_game() {
                 if (( ny >= 0 && ny < MAP_H && nx >= 0 && nx < MAP_W )); then
                     tile="${MAP_DATA[$ny]:$nx:1}"
                     if [[ "$tile" == "+" ]]; then MAP_DATA[$ny]="${MAP_DATA[$ny]:0:$nx}/${MAP_DATA[$ny]:$((nx+1))}"; LOG="Opened door."; move_enemies; ((LIGHT--))
-                    elif [[ "$tile" != "#" ]]; then handle_move $nx $ny; [[ $? -eq 0 ]] && move_enemies; fi
+                    elif [[ "$tile" != "#" ]]; then handle_move $nx $ny; [[ $? -eq 0 ]] && (( HP > 0 )) && move_enemies; fi
                 fi
             fi
             render
         fi
     done
+    if (( HP <= 0 )); then
+        while read -rsn1 key; do
+            if [[ "$key" == $'\e' ]]; then
+                e1=""
+                read -rsn1 -t 0.01 e1 || true
+                if [[ "$e1" == "[" ]]; then
+                    read -rsn1 -t 0.01 _ || true
+                    continue
+                fi
+                key="ESC"
+            fi
+            case "$key" in
+                ""|' '|q|Q|ESC|$'\x03') break ;;
+            esac
+        done
+    fi
     cleanup
 }
 
