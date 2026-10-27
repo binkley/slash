@@ -74,7 +74,7 @@ Use `-` for unused numeric columns.
 
 | Type | Description | Active Columns |
 | :--- | :--- | :--- |
-| `MON` | Monster | `HP` (health), `DAMAGE` (melee attack), `AC` (damage reduction) |
+| `MON` | Monster | `HP` (health), `DAMAGE` (melee attack), `AC` (damage reduction), `VALUE` (HP regen per turn) |
 | `WEP` | Weapon | `ATTACK` (bonus added to player base attack) |
 | `ARM` | Armor | `AC` (reduces incoming monster melee damage) |
 | `POT` | Potion | `HP` (instant heal) or `AC` + `VALUE` (temporary AC boost and turn duration) |

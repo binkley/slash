@@ -102,6 +102,9 @@ assert_eq "${TYPE_DB["E_196"]:-}" "MON" "loads monster type by compound key (E_1
 assert_eq "${NAME_DB["!_160"]:-}" "Potion of Healing" "distinguishes Potion of Healing (!_160)"
 assert_eq "${NAME_DB["!_111"]:-}" "Potion of Protection" "distinguishes Potion of Protection (!_111)"
 assert_eq "${AC_DB["G_244"]:-}" "6" "loads Iron Golem armor class (G_244)"
+assert_eq "${NAME_DB["x_201"]:-}:${HP_DB["x_201"]:-}:${VAL_DB["x_201"]:-}" "Grid Bug:6:0" "loads Grid Bug stats and 0 regen (x_201)"
+assert_eq "${NAME_DB["T_70"]:-}:${VAL_DB["T_70"]:-}" "Troll:1" "loads Troll with 1 HP/turn regeneration (T_70)"
+assert_eq "${NAME_DB["H_37"]:-}:${VAL_DB["H_37"]:-}" "Hydra:2" "loads Hydra with 2 HP/turn regeneration (H_37)"
 assert_eq "${ATK_DB["E_196"]:-}" "0" "converts '-' stat placeholders to 0"
 
 found_skel=0
@@ -193,6 +196,21 @@ assert_eq "${ENTITIES["6,3"]:-}" "" "removes monster entity on lethal hit"
 assert_eq "${CUR_MON_HP["6,3"]:-}" "" "removes monster HP entry on lethal hit"
 assert_eq "$HP" "20" "dead monster does not counterattack in move_enemies"
 assert_contains "$LOG" "Killed Giant Bat!" "logs lethal blow message"
+
+# Monster regeneration (VALUE column on MON: Troll +1/turn, Hydra +2/turn, clamped at max HP)
+setup_test_room 10 6
+ENTITIES["7,2"]="T_70"
+CUR_MON_HP["7,2"]=18
+ENTITIES["7,4"]="H_37"
+CUR_MON_HP["7,4"]=27
+ENTITIES["2,2"]="x_201"
+CUR_MON_HP["2,2"]=3
+move_enemies
+assert_eq "${CUR_MON_HP["6,2"]:-}" "19" "injured Troll regenerates 1 HP during move_enemies"
+assert_eq "${CUR_MON_HP["6,4"]:-}" "28" "injured Hydra regenerates 2 HP and clamps at max HP (28)"
+assert_eq "${CUR_MON_HP["3,2"]:-}" "3" "monster with '-' regen (Grid Bug) does not regenerate HP"
+assert_contains "$LOG" "Troll heals 1 HP!" "logs monster regeneration amount in HUD LOG"
+assert_contains "$LOG" "Hydra heals 1 HP!" "logs clamped regeneration amount when near max HP"
 
 # Consumables: step announces item, ',' (handle_pickup) uses/equips it
 setup_test_room 10 6

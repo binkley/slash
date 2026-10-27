@@ -119,6 +119,16 @@ move_enemies() {
             local ex=${pos%,*} ey=${pos#*,}
             local dx=$(( PX - ex )) dy=$(( PY - ey ))
             local abs_dx=${dx#-}; local abs_dy=${dy#-}
+            local mhp="${CUR_MON_HP["$pos"]:-${HP_DB["$key"]}}"
+            local regen="${VAL_DB["$key"]:-0}"
+            if (( regen > 0 && mhp > 0 && mhp < HP_DB["$key"] )); then
+                local healed=$(( mhp + regen > HP_DB["$key"] ? HP_DB["$key"] - mhp : regen ))
+                (( mhp += healed ))
+                CUR_MON_HP["$pos"]="$mhp"
+                if (( abs_dx*abs_dx + abs_dy*abs_dy < SENSE_DIST * SENSE_DIST )); then
+                    LOG="${LOG:+$LOG }${GREEN}${NAME_DB["$key"]} heals $healed HP!${RESET}"
+                fi
+            fi
             
             local total_def=$(( DEF + AC_BOOST ))
 
