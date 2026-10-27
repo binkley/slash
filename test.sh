@@ -217,6 +217,15 @@ assert_eq "${CUR_MON_HP["3,2"]:-}" "3" "monster with '-' regen (Grid Bug) does n
 assert_contains "$LOG" "Troll heals 1 HP!" "logs monster regeneration amount in HUD LOG"
 assert_contains "$LOG" "Hydra heals 1 HP!" "logs clamped regeneration amount when near max HP"
 
+# Grid Bug (x_201) orthogonal-only constraint: cannot melee diagonally, steps orthogonally instead
+setup_test_room 10 6
+ENTITIES["6,4"]="x_201"
+CUR_MON_HP["6,4"]=6
+move_enemies
+assert_eq "$HP:${ENTITIES["6,3"]:-}" "20:x_201" "Grid Bug at diagonal (6,4) does not attack player at (5,3) and steps orthogonally to (6,3)"
+move_enemies
+assert_eq "$HP" "17" "Grid Bug at orthogonal (6,3) attacks player at (5,3) for 3 damage"
+
 # Consumables, Inventory & Identify Mechanics:
 # - stepping onto an unidentified item hides its identity/stats
 # - pressing ',' (handle_pickup) stores non-gold items in INVENTORY
@@ -454,6 +463,33 @@ plain_e2e="$(strip_ansi "$e2e_out")"
 assert_contains "$plain_e2e" "#.@/...#" "E2E loop translates arrow key escape sequence and opens '+' door to '/'"
 assert_contains "$plain_e2e" "LOG: Waiting..." "E2E loop processes '.' wait command and updates HUD log"
 assert_contains "$plain_e2e" "Fuel: 98" "E2E loop decrements torch fuel on door open and wait actions"
+
+# 8-way movement via vi-keys (hjkl + yubn) and numpad (8246 + 7913, 5 wait)
+e2e_diag_out="$(
+    bash -c '
+        source "'"$SCRIPT_DIR"'/game.sh"
+        flash_red() { :; }
+        load_entities
+        generate_dungeon() {
+            MAP_W=8; MAP_H=5; FLICKER=0; BASE_VIEW=10
+            MAP_DATA=("########" "#......#" "#......#" "#......#" "########")
+            VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
+            PX=2; PY=2
+            ENTITIES["3,1"]="!_160"
+            ENTITIES["4,2"]="!_111"
+        }
+        # "u" moves NE from (2,2) to (3,1) onto ruby potion;
+        # "3" (numpad SE) moves from (3,1) to (4,2) onto sapphire potion;
+        # "b" moves SW from (4,2) to (3,3);
+        # "7" (numpad NW) moves from (3,3) back to (2,2);
+        # "5" (numpad wait) waits 1 turn; "Q" quits
+        printf "u3b75Q" | run_game
+    '
+)"
+plain_diag="$(strip_ansi "$e2e_diag_out")"
+assert_contains "$plain_diag" "LOG: You see ruby potion (? effect) here (press , to pick up)." "E2E vi-key 'u' moves diagonally NE onto (3,1)"
+assert_contains "$plain_diag" "LOG: You see sapphire potion (? effect) here (press , to pick up)." "E2E numpad '3' moves diagonally SE onto (4,2)"
+assert_contains "$plain_diag" "Fuel: 95" "E2E diagonal steps (u, 3, b, 7) and numpad wait (5) consume 5 turns of fuel"
 
 # Context-sensitive <ESC>, Help menu, quit confirmation, and Ctrl-C (\x03)
 e2e_modal_out="$(

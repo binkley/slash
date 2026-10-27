@@ -133,8 +133,14 @@ move_enemies() {
             fi
             
             local total_def=$(( DEF + AC_BOOST ))
+            local can_melee=0
+            if [[ "$key" == "x_201" ]]; then
+                (( abs_dx + abs_dy == 1 )) && can_melee=1
+            else
+                (( abs_dx <= 1 && abs_dy <= 1 )) && can_melee=1
+            fi
 
-            if (( abs_dx <= 1 && abs_dy <= 1 )); then
+            if (( can_melee == 1 )); then
                 if (( HP > 0 )); then
                     local edmg=$(( DMG_DB["$key"] - total_def ))
                     (( edmg < 0 )) && edmg=0
@@ -217,12 +223,13 @@ render() {
 render_help() {
     local lines=(
         "+------------ SLASH HELP ------------+"
-        "| Move / Attack : w a s d or Arrows  |"
+        "| Move (4-way)  : wasd / Arrows      |"
+        "| Move (8-way)  : hjkl+yubn / Numpad |"
         "| Pick Up Item  : ,                  |"
         "| Inventory     : i ([1-9] use/equip)|"
         "| Descend Stairs: >                  |"
         "| Open Door     : Bump into +        |"
-        "| Wait 1 Turn   : .                  |"
+        "| Wait 1 Turn   : . or 5             |"
         "| Toggle Debug  : v                  |"
         "| Quit Game     : q (or Q immediate) |"
         "| Close Help    : ESC / ? / Space    |"
@@ -613,23 +620,27 @@ run_game() {
             esac
             continue
         fi
-        processed=0; nx=$PX; ny=$PY
+        processed=0; moved=0; nx=$PX; ny=$PY
         case "$key" in
-            w) ((ny--)); processed=1 ;;
-            s) ((ny++)); processed=1 ;;
-            a) ((nx--)); processed=1 ;;
-            d) ((nx++)); processed=1 ;;
+            w|k|8) ((ny--)); moved=1; processed=1 ;;
+            s|j|2) ((ny++)); moved=1; processed=1 ;;
+            a|h|4) ((nx--)); moved=1; processed=1 ;;
+            d|l|6) ((nx++)); moved=1; processed=1 ;;
+            y|7)   ((nx--)); ((ny--)); moved=1; processed=1 ;;
+            u|9)   ((nx++)); ((ny--)); moved=1; processed=1 ;;
+            b|1)   ((nx--)); ((ny++)); moved=1; processed=1 ;;
+            n|3)   ((nx++)); ((ny++)); moved=1; processed=1 ;;
             ,) handle_pickup && move_enemies; render; continue ;;
             i) UI_MODE="inventory"; LOG="INVENTORY: [1-9] Use/Equip  [ESC/i/Space] Resume"; render; continue ;;
             '>') handle_descend; render; continue ;;
-            .) LOG="Waiting..."; move_enemies; ((LIGHT--)); processed=1 ;;
+            .|5) LOG="Waiting..."; move_enemies; ((LIGHT--)); processed=1 ;;
             v) ((DEBUG = !DEBUG)); processed=1 ;;
             ESC|'?') UI_MODE="help"; LOG="HELP: [q] Quit  [ESC/?/Space] Resume"; render; continue ;;
             q) UI_MODE="confirm_quit"; LOG="${YELLOW}Really quit? [y/q] Yes  [n/ESC] Cancel${RESET}"; render; continue ;;
             Q) break ;;
         esac
         if [[ $processed -eq 1 ]]; then
-            if [[ "$key" != "." && "$key" != "v" ]]; then
+            if [[ $moved -eq 1 ]]; then
                 if (( ny >= 0 && ny < MAP_H && nx >= 0 && nx < MAP_W )); then
                     tile="${MAP_DATA[$ny]:$nx:1}"
                     if [[ "$tile" == "+" ]]; then MAP_DATA[$ny]="${MAP_DATA[$ny]:0:$nx}/${MAP_DATA[$ny]:$((nx+1))}"; LOG="Opened door."; move_enemies; ((LIGHT--))

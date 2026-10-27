@@ -38,11 +38,12 @@ To run directly on the host (requires Bash 4+):
 
 | Key | Action |
 | :--- | :--- |
-| `w` `a` `s` `d` / Arrow Keys | Move, bump-attack monsters, or open closed doors (`+`) |
+| `w` `a` `s` `d` / Arrow Keys / `h` `j` `k` `l` / Numpad `8` `4` `6` `2` | Move cardinally (4-way), bump-attack monsters, or open closed doors (`+`) |
+| `y` `u` `b` `n` / Numpad `7` `9` `1` `3` | Move or attack diagonally (NW, NE, SW, SE) |
 | `,` | Pick up the item at your feet into your pack (gold is collected immediately) |
 | `i` | Open Inventory to use or equip carried items (`1`–`9` to select; identifies item type) |
 | `>` | Descend staircase (`>`) to the next dungeon floor |
-| `.` | Wait a turn |
+| `.` / Numpad `5` | Wait a turn |
 | `ESC` / `?` | Open Help menu (or cancel an active prompt/modal; `Space` also closes Help) |
 | `q` | Quit (prompts for confirmation `[y/n]`, or quits immediately from Help) |
 | `Q` / `Ctrl-C` | Quit immediately |
