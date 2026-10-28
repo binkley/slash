@@ -9,9 +9,11 @@ RED=$'\e[31m'; YELLOW=$'\e[33m'; GREEN=$'\e[32m'; BLUE=$'\e[34m'
 PURPLE=$'\e[38;5;135m'; CYAN=$'\e[36m'; PINK=$'\e[38;5;201m'
 
 COL_PLAYER=$'\e[38;5;82m'; COL_WALL_LIT=$'\e[38;5;250m'; COL_WALL_DIM=$'\e[38;5;236m'
-COL_FLOOR_LIT=$'\e[38;5;240m'; COL_FLOOR_DIM=$'\e[38;5;233m'
+COL_FLOOR_LIT=$'\e[38;5;178m'; COL_CORR_LIT=$'\e[38;5;136m'; COL_FLOOR_DIM=$'\e[38;5;236m'
 COL_DOOR=$'\e[38;5;94m'; COL_LAVA=$'\e[48;5;196m\e[38;5;226m'
 COL_STAIRS=$'\e[38;5;51m'; COL_GOLD=$'\e[38;5;220m'
+WALL_CHARS=("┼" "│" "─" "└" "│" "│" "┌" "├" "─" "┘" "─" "┴" "┐" "┤" "┬" "┼")
+WALL_CH=" "
 
 # Game State
 BASE_VIEW=7; VIEW_DIST=7; SENSE_DIST=9
@@ -63,35 +65,120 @@ MAX_INV=9
 
 generate_dungeon() {
     MAP_DATA=(); VISITED=(); ENTITIES=(); TRAPS=(); CUR_MON_HP=()
-    local wall_row=$(printf "%${MAP_W}s" | tr ' ' '#')
+    local wall_row y x
+    wall_row=$(printf "%${MAP_W}s" | tr ' ' '#')
     for ((y=0; y<MAP_H; y++)); do MAP_DATA[$y]="$wall_row"; done
-    local tx=$((MAP_W / 2)) ty=$((MAP_H / 2))
-    local steps=0 max=$(( (MAP_W * MAP_H) / 3 )) 
-    PX=$tx; PY=$ty
-    while (( steps < max )); do
-        if [[ "${MAP_DATA[$ty]:$tx:1}" == "#" ]]; then
-            MAP_DATA[$ty]="${MAP_DATA[$ty]:0:$tx}.${MAP_DATA[$ty]:$((tx+1))}"
-            ((steps++))
-            if (( tx != PX || ty != PY )); then
-                local r=$((RANDOM % 100))
-                if (( r < 3 )); then 
-                    local choice="${SPAWN_POOL[$RANDOM % ${#SPAWN_POOL[@]}]}"
-                    if [[ -n "$choice" ]]; then
-                        ENTITIES["$tx,$ty"]="$choice"
-                        # choice is sym_col, so we extract type check via key
-                        [[ "${TYPE_DB["$choice"]}" == "MON" ]] && CUR_MON_HP["$tx,$ty"]="${HP_DB["$choice"]}"
-                    fi
-                elif (( r < 4 )); then MAP_DATA[$ty]="${MAP_DATA[$ty]:0:$tx}^${MAP_DATA[$ty]:$((tx+1))}"
-                elif (( r < 5 )); then TRAPS["$tx,$ty"]=1
-                elif (( r < 6 )); then MAP_DATA[$ty]="${MAP_DATA[$ty]:0:$tx}+${MAP_DATA[$ty]:$((tx+1))}"
+
+    local -a r_cx=() r_cy=()
+    local max_rooms=7 attempt rw rh rx ry overlap
+    (( MAP_W < 20 || MAP_H < 10 )) && max_rooms=2
+    for ((attempt=0; attempt<35 && ${#r_cx[@]}<max_rooms; attempt++)); do
+        rw=$(( RANDOM % 7 + 4 )); rh=$(( RANDOM % 3 + 2 ))
+        (( rw > MAP_W - 4 )) && rw=$(( MAP_W - 4 ))
+        (( rh > MAP_H - 4 )) && rh=$(( MAP_H - 4 ))
+        (( rw < 2 )) && rw=2; (( rh < 2 )) && rh=2
+        rx=$(( RANDOM % (MAP_W - rw - 2) + 1 ))
+        ry=$(( RANDOM % (MAP_H - rh - 2) + 1 ))
+        overlap=0
+        local cy0=$(( ry > 3 ? ry - 3 : 0 ))
+        local cy1=$(( ry + rh + 2 < MAP_H ? ry + rh + 2 : MAP_H - 1 ))
+        local cx0=$(( rx > 3 ? rx - 3 : 0 ))
+        local cs=$(( rx + rw + 3 - cx0 ))
+        for ((y=cy0; y<=cy1; y++)); do
+            [[ "${MAP_DATA[$y]:$cx0:$cs}" == *.* ]] && { overlap=1; break; }
+        done
+        (( overlap == 1 )) && continue
+        local dots
+        dots=$(printf "%${rw}s" | tr ' ' '.')
+        for ((y=ry; y<ry+rh; y++)); do
+            MAP_DATA[$y]="${MAP_DATA[$y]:0:$rx}${dots}${MAP_DATA[$y]:$((rx + rw))}"
+        done
+        r_cx+=("$(( rx + rw / 2 ))"); r_cy+=("$(( ry + rh / 2 ))")
+    done
+
+    local i tx ty x1 y1 sx sy nx ny nx2 ny2
+    for ((i=1; i<${#r_cx[@]}; i++)); do
+        tx=${r_cx[$((i - 1))]}; ty=${r_cy[$((i - 1))]}
+        x1=${r_cx[$i]}; y1=${r_cy[$i]}
+        while (( tx != x1 )); do
+            sx=$(( tx < x1 ? 1 : -1 )); nx=$(( tx + sx ))
+            nx2=$(( nx + sx >= 0 && nx + sx < MAP_W ? nx + sx : nx ))
+            if [[ "${MAP_DATA[$ty]:$tx:1}" != "." ]]; then
+                [[ "${MAP_DATA[$ty]:$tx:1}" == "#" ]] && MAP_DATA[$ty]="${MAP_DATA[$ty]:0:$tx}:${MAP_DATA[$ty]:$((tx + 1))}"
+                if [[ "${MAP_DATA[$ty]:$nx:1}" == "#" && "${MAP_DATA[$ty]:$nx2:1}" != "." ]]; then
+                    if (( ty > 1 )) && [[ "${MAP_DATA[$((ty - 1))]:$nx:1}" == "." || "${MAP_DATA[$((ty - 1))]:$nx2:1}" == "." ]]; then ((ty--)); continue
+                    elif (( ty + 2 < MAP_H )) && [[ "${MAP_DATA[$((ty + 1))]:$nx:1}" == "." || "${MAP_DATA[$((ty + 1))]:$nx2:1}" == "." ]]; then ((ty++)); continue; fi
                 fi
             fi
-        fi
-        case $((RANDOM % 4)) in 0) ((ty > 1)) && ((ty--)) ;; 1) ((ty < MAP_H-2)) && ((ty++)) ;; 2) ((tx > 1)) && ((tx--)) ;; 3) ((tx < MAP_W-2)) && ((tx++)) ;; esac
+            (( tx += sx ))
+        done
+        while (( ty != y1 )); do
+            sy=$(( ty < y1 ? 1 : -1 )); ny=$(( ty + sy ))
+            ny2=$(( ny + sy >= 0 && ny + sy < MAP_H ? ny + sy : ny ))
+            if [[ "${MAP_DATA[$ty]:$tx:1}" != "." ]]; then
+                [[ "${MAP_DATA[$ty]:$tx:1}" == "#" ]] && MAP_DATA[$ty]="${MAP_DATA[$ty]:0:$tx}:${MAP_DATA[$ty]:$((tx + 1))}"
+                if [[ "${MAP_DATA[$ny]:$tx:1}" == "#" && "${MAP_DATA[$ny2]:$tx:1}" != "." ]]; then
+                    if (( tx > 1 )) && [[ "${MAP_DATA[$ny]:$((tx - 1)):1}" == "." || "${MAP_DATA[$ny2]:$((tx - 1)):1}" == "." ]]; then ((tx--)); continue
+                    elif (( tx + 2 < MAP_W )) && [[ "${MAP_DATA[$ny]:$((tx + 1)):1}" == "." || "${MAP_DATA[$ny2]:$((tx + 1)):1}" == "." ]]; then ((tx++)); continue; fi
+                fi
+            fi
+            (( ty += sy ))
+        done
     done
-    MAP_DATA[$ty]="${MAP_DATA[$ty]:0:$tx}.${MAP_DATA[$ty]:$((tx+1))}"
-    unset 'CUR_MON_HP["'$tx,$ty'"]' 'TRAPS["'$tx,$ty'"]'
-    ENTITIES["$tx,$ty"]="S_stairs" # Special key for stairs
+
+    PX=${r_cx[0]}; PY=${r_cy[0]}
+    local sx=${r_cx[$(( ${#r_cx[@]} - 1 ))]} sy=${r_cy[$(( ${#r_cy[@]} - 1 ))]}
+    (( sx == PX && sy == PY && sx + 1 < MAP_W - 1 )) && ((sx++))
+
+    for ((y=1; y<MAP_H-1; y++)); do
+        for ((x=1; x<MAP_W-1; x++)); do
+            local ch="${MAP_DATA[$y]:$x:1}"
+            if [[ "$ch" == ":" ]]; then
+                local n="${MAP_DATA[$((y - 1))]:$x:1}" s="${MAP_DATA[$((y + 1))]:$x:1}"
+                local w="${MAP_DATA[$y]:$((x - 1)):1}" e="${MAP_DATA[$y]:$((x + 1)):1}"
+                if [[ ( "$n" == "#" && "$s" == "#" && ( "$w$e" == ".:" || "$w$e" == ":." ) ) ||
+                      ( "$w" == "#" && "$e" == "#" && ( "$n$s" == ".:" || "$n$s" == ":." ) ) ]]; then
+                    MAP_DATA[$y]="${MAP_DATA[$y]:0:$x}+${MAP_DATA[$y]:$((x + 1))}"
+                fi
+            elif [[ "$ch" == "." ]] && (( (x != PX || y != PY) && (x != sx || y != sy) )); then
+                local r=$(( RANDOM % 100 ))
+                if (( r < 6 && ${#SPAWN_POOL[@]} > 0 )); then
+                    local choice="${SPAWN_POOL[$RANDOM % ${#SPAWN_POOL[@]}]}"
+                    ENTITIES["$x,$y"]="$choice"
+                    [[ "${TYPE_DB["$choice"]:-}" == "MON" ]] && CUR_MON_HP["$x,$y"]="${HP_DB["$choice"]}"
+                elif (( r == 6 )); then MAP_DATA[$y]="${MAP_DATA[$y]:0:$x}^${MAP_DATA[$y]:$((x + 1))}"
+                elif (( r == 7 )); then TRAPS["$x,$y"]=1
+                fi
+            fi
+        done
+    done
+    ENTITIES["$sx,$sy"]="S_stairs"
+}
+
+is_room_wall() {
+    local wx=$1 wy=$2
+    (( wx < 0 || wx >= MAP_W || wy < 0 || wy >= MAP_H )) && return 1
+    [[ "${MAP_DATA[$wy]:$wx:1}" != "#" ]] && return 1
+    local sx=$(( wx > 0 ? wx - 1 : 0 ))
+    local sl=$(( (wx > 0 ? 2 : 1) + (wx + 1 < MAP_W ? 1 : 0) ))
+    local nbrs="${MAP_DATA[$wy]:$sx:$sl}"
+    (( wy > 0 )) && nbrs+="${MAP_DATA[$((wy - 1))]:$sx:$sl}"
+    (( wy + 1 < MAP_H )) && nbrs+="${MAP_DATA[$((wy + 1))]:$sx:$sl}"
+    [[ "$nbrs" == *[.^]* ]]
+}
+
+wall_glyph() {
+    local wx=$1 wy=$2
+    if ! is_room_wall "$wx" "$wy"; then
+        WALL_CH=" "
+        return
+    fi
+    local mask=0
+    if is_room_wall "$wx" $((wy - 1)) || { (( wy > 1 )) && [[ "${MAP_DATA[$((wy - 1))]:$wx:1}" == [+/] && "${MAP_DATA[$((wy - 2))]:$wx:1}" == "#" ]]; }; then ((mask |= 1)); fi
+    if is_room_wall $((wx + 1)) "$wy" || { (( wx + 2 < MAP_W )) && [[ "${MAP_DATA[$wy]:$((wx + 1)):1}" == [+/] && "${MAP_DATA[$wy]:$((wx + 2)):1}" == "#" ]]; }; then ((mask |= 2)); fi
+    if is_room_wall "$wx" $((wy + 1)) || { (( wy + 2 < MAP_H )) && [[ "${MAP_DATA[$((wy + 1))]:$wx:1}" == [+/] && "${MAP_DATA[$((wy + 2))]:$wx:1}" == "#" ]]; }; then ((mask |= 4)); fi
+    if is_room_wall $((wx - 1)) "$wy" || { (( wx > 1 )) && [[ "${MAP_DATA[$wy]:$((wx - 1)):1}" == [+/] && "${MAP_DATA[$wy]:$((wx - 2)):1}" == "#" ]]; }; then ((mask |= 8)); fi
+    WALL_CH="${WALL_CHARS[$mask]}"
 }
 
 can_see() {
@@ -162,7 +249,7 @@ move_enemies() {
                 if (( abs_dx > abs_dy )); then (( dx > 0 )) && ((nx++)) || ((nx--))
                 else (( dy > 0 )) && ((ny++)) || ((ny--)); fi
                 local target_tile="${MAP_DATA[$ny]:$nx:1}"
-                if [[ "$target_tile" == "." || "$target_tile" == "/" ]] && [[ -z "${NEW_ENTITIES["$nx,$ny"]:-}" && -z "${ENTITIES["$nx,$ny"]:-}" ]]; then
+                if [[ "$target_tile" == "." || "$target_tile" == ":" || "$target_tile" == "/" ]] && [[ -z "${NEW_ENTITIES["$nx,$ny"]:-}" && -z "${ENTITIES["$nx,$ny"]:-}" ]]; then
                     NEW_ENTITIES["$nx,$ny"]="$key"; NEW_MON_HP["$nx,$ny"]="${CUR_MON_HP["$pos"]}"
                 else NEW_ENTITIES["$pos"]="$key"; NEW_MON_HP["$pos"]="${CUR_MON_HP["$pos"]}"; fi
             else NEW_ENTITIES["$pos"]="$key"; NEW_MON_HP["$pos"]="${CUR_MON_HP["$pos"]}"; fi
@@ -184,25 +271,39 @@ render() {
         local row="${MAP_DATA[$y]}"
         for ((x=0; x<MAP_W; x++)); do
             if [[ $DEBUG -eq 0 ]] && (( percent <= 30 )); then
-                if (( x == 0 || x == MAP_W - 1 || y == 0 || y == MAP_H - 1 )); then frame+="${RED}!${RESET}"; continue; fi
+                if (( y == 0 )); then (( x == 0 )) && frame+="${RED}╔${RESET}" || { (( x == MAP_W - 1 )) && frame+="${RED}╗${RESET}" || frame+="${RED}═${RESET}"; }; continue
+                elif (( y == MAP_H - 1 )); then (( x == 0 )) && frame+="${RED}╚${RESET}" || { (( x == MAP_W - 1 )) && frame+="${RED}╝${RESET}" || frame+="${RED}═${RESET}"; }; continue
+                elif (( x == 0 || x == MAP_W - 1 )); then frame+="${RED}║${RESET}"; continue; fi
             fi
             local dx=$((x-PX)) dy=$((y-PY)); local dist_sq=$((dx*dx + dy*dy)); local visible=0
             if (( DEBUG == 1 )); then visible=1; elif (( dist_sq <= VIEW_DIST * VIEW_DIST )); then can_see $x $y && visible=1; fi
             if (( visible == 1 )); then
                 VISITED["$x,$y"]=1; local key="${ENTITIES["$x,$y"]:-}"
+                local tile_ch="${row:$x:1}"
                 if (( x == PX && y == PY )); then frame+="${COL_PLAYER}@${RESET}"
                 elif [[ -n "$key" ]]; then
                     if [[ "$key" == "S_stairs" ]]; then frame+="${COL_STAIRS}>${RESET}"
                     else frame+="${COLOR_DB["$key"]}${key%_*}${RESET}"; fi
-                elif [[ "${row:$x:1}" == "^" ]]; then frame+="${COL_LAVA}^${RESET}"
-                elif [[ "${row:$x:1}" == "+" ]]; then frame+="${COL_DOOR}+${RESET}"
-                elif [[ "${row:$x:1}" == "/" ]]; then frame+="${COL_DOOR}/${RESET}"
-                elif [[ ${TRAPS["$x,$y"]:-0} == 1 && $DEBUG == 1 ]]; then frame+="${PURPLE}x${RESET}"
-                elif [[ ${TRAPS["$x,$y"]:-0} == 2 ]]; then frame+="${RED}x${RESET}"
-                elif [[ "${row:$x:1}" == "#" ]]; then frame+="${COL_WALL_LIT}#${RESET}"
-                else frame+="${COL_FLOOR_LIT}.${RESET}"; fi
+                elif [[ "$tile_ch" == "^" ]]; then frame+="${COL_LAVA}≈${RESET}"
+                elif [[ "$tile_ch" == "+" ]]; then frame+="${COL_DOOR}+${RESET}"
+                elif [[ "$tile_ch" == "/" ]]; then frame+="${COL_DOOR}/${RESET}"
+                elif [[ ${TRAPS["$x,$y"]:-0} == 1 && $DEBUG == 1 ]]; then frame+="${PURPLE}^${RESET}"
+                elif [[ ${TRAPS["$x,$y"]:-0} == 2 ]]; then frame+="${RED}^${RESET}"
+                elif [[ "$tile_ch" == "#" ]]; then
+                    wall_glyph "$x" "$y"
+                    [[ "$WALL_CH" == " " ]] && frame+=" " || frame+="${COL_WALL_LIT}${WALL_CH}${RESET}"
+                elif [[ "$tile_ch" == ":" ]]; then frame+="${COL_CORR_LIT}░${RESET}"
+                else frame+="${COL_FLOOR_LIT}·${RESET}"; fi
             elif [[ -n "${VISITED["$x,$y"]:-}" ]]; then
-                [[ -n "${ENTITIES["$x,$y"]:-}" ]] && frame+="?" || frame+="${COL_WALL_DIM}${row:$x:1}${RESET}"
+                local tile_ch="${row:$x:1}"
+                if [[ -n "${ENTITIES["$x,$y"]:-}" ]]; then frame+="?"
+                elif [[ "$tile_ch" == "#" ]]; then
+                    wall_glyph "$x" "$y"
+                    [[ "$WALL_CH" == " " ]] && frame+=" " || frame+="${COL_WALL_DIM}${WALL_CH}${RESET}"
+                elif [[ "$tile_ch" == ":" ]]; then frame+="${COL_WALL_DIM}░${RESET}"
+                elif [[ "$tile_ch" == "^" ]]; then frame+="${COL_WALL_DIM}≈${RESET}"
+                elif [[ "$tile_ch" == "." ]]; then frame+="${COL_WALL_DIM}·${RESET}"
+                else frame+="${COL_WALL_DIM}${tile_ch}${RESET}"; fi
             else frame+=" "; fi
         done
         frame+=$'\r\n'
@@ -212,39 +313,59 @@ render() {
         render_help
     elif [[ "${UI_MODE:-}" == "inventory" || "${UI_MODE:-}" == "drop" ]]; then
         render_inventory
+    elif [[ "${UI_MODE:-}" == "confirm_quit" ]]; then
+        render_quit
     fi
     printf '\e[%d;1H' $((MAP_H + 1))
     local total_def=$(( DEF + AC_BOOST ))
-    printf "${RESET}LVL: ${CYAN}$LEVEL${RESET} | HP: ${hp_col}$HP/$MAX_HP${RESET} | Fuel: ${light_col}$LIGHT${RESET} | AC: ${CYAN}$total_def${RESET} (${AC_TIMER}t)\e[K\r\n"
-    printf "${RESET}Equip: ${CYAN}$WEAPON${RESET} / ${CYAN}$ARMOR${RESET} | Gold: ${COL_GOLD}$GOLD${RESET} | [ESC/?] Help\e[K\r\n"
+    printf "${RESET}LVL: ${CYAN}$LEVEL${RESET} │ HP: ${hp_col}$HP/$MAX_HP${RESET} │ Fuel: ${light_col}$LIGHT${RESET} │ AC: ${CYAN}$total_def${RESET} (${AC_TIMER}t)\e[K\r\n"
+    printf "${RESET}Equip: ${CYAN}$WEAPON${RESET} / ${CYAN}$ARMOR${RESET} │ Gold: ${COL_GOLD}$GOLD${RESET} │ [ESC/?] Help\e[K\r\n"
     printf "${RESET}LOG: $LOG${RESET}\e[K"
+}
+
+draw_modal() {
+    local col="$1" rows="$2"
+    shift 2
+    local box_h=$# box_w=${#1}
+    local start_y=$(( (rows - box_h) / 2 + 1 ))
+    local start_x=$(( (MAP_W - box_w) / 2 + 1 ))
+    (( start_y < 1 )) && start_y=1
+    (( start_x < 1 )) && start_x=1
+    local i=0 line
+    for line in "$@"; do
+        printf '\e[%d;%dH%s%s%s' $((start_y + i)) "$start_x" "$col" "$line" "$RESET"
+        ((i++))
+    done
 }
 
 render_help() {
     local lines=(
-        "+------------ SLASH HELP ------------+"
-        "| Move (4-way)  : hjkl / Arrows/8462 |"
-        "| Move (Diag)   : yubn / Numpad 7913 |"
-        "| Search Traps  : s                  |"
-        "| Pick Up / Drop: , / d              |"
-        "| Pack / Use    : i, q, w, W, a [1-9]|"
-        "| Descend Stairs: >                  |"
-        "| Open Door     : Bump into +        |"
-        "| Wait 1 Turn   : . or 5             |"
-        "| Toggle Debug  : v                  |"
-        "| Quit Game     : Q (confirm [y/n])  |"
-        "| Close Help    : ESC / ? / Space    |"
-        "+------------------------------------+"
+        "┌──────────── SLASH HELP ────────────┐"
+        "│ Move (4-way)  : hjkl / Arrows/8462 │"
+        "│ Move (Diag)   : yubn / Numpad 7913 │"
+        "│ Search Traps  : s                  │"
+        "│ Pick Up / Drop: , / d              │"
+        "│ Pack / Use    : i, q, w, W, a [1-9]│"
+        "│ Descend Stairs: >                  │"
+        "│ Open Door     : Bump into +        │"
+        "│ Wait 1 Turn   : . or 5             │"
+        "│ Toggle Debug  : v                  │"
+        "│ Quit Game     : Q (confirm [y/n])  │"
+        "│ Close Help    : ESC / ? / Space    │"
+        "└────────────────────────────────────┘"
     )
-    local box_h=${#lines[@]} box_w=${#lines[0]}
-    local start_y=$(( (MAP_H - box_h) / 2 + 1 ))
-    local start_x=$(( (MAP_W - box_w) / 2 + 1 ))
-    (( start_y < 1 )) && start_y=1
-    (( start_x < 1 )) && start_x=1
-    local i
-    for ((i=0; i<box_h; i++)); do
-        printf '\e[%d;%dH%s%s%s' $((start_y + i)) "$start_x" "$CYAN" "${lines[$i]}" "$RESET"
-    done
+    draw_modal "$CYAN" "$MAP_H" "${lines[@]}"
+}
+
+render_quit() {
+    local lines=(
+        "┌────────────── QUIT GAME ──────────────┐"
+        "│  Really quit and abandon this delve?  │"
+        "├───────────────────────────────────────┤"
+        "│    [y/Q] Yes, Quit   [n/ESC] Cancel   │"
+        "└───────────────────────────────────────┘"
+    )
+    draw_modal "$YELLOW" "$MAP_H" "${lines[@]}"
 }
 
 unidentified_desc() {
@@ -309,36 +430,29 @@ pad_right() {
 render_inventory() {
     local total_def=$(( DEF + AC_BOOST ))
     local lines=(
-        "+--------------- INVENTORY ---------------+"
-        "| $(pad_right "Wielded: $WEAPON (+$ATK ATK)" 39) |"
-        "| $(pad_right "Worn   : $ARMOR (+$total_def AC)" 39) |"
-        "|-----------------------------------------|"
+        "┌─────────────── INVENTORY ───────────────┐"
+        "│ $(pad_right "Wielded: $WEAPON (+$ATK ATK)" 39) │"
+        "│ $(pad_right "Worn   : $ARMOR (+$total_def AC)" 39) │"
+        "├─────────────────────────────────────────┤"
     )
     local i
     if (( ${#INVENTORY[@]} == 0 )); then
-        lines+=("| $(pad_right "(Pack is empty - press , on items)" 39) |")
+        lines+=("│ $(pad_right "(Pack is empty - press , on items)" 39) │")
     else
         for ((i=0; i<${#INVENTORY[@]}; i++)); do
             local key="${INVENTORY[$i]}"
             local entry="[$(($i + 1))] $(item_desc "$key")"
-            lines+=("| $(pad_right "$entry" 39) |")
+            lines+=("│ $(pad_right "$entry" 39) │")
         done
     fi
-    local footer="| [1-9] Use/Equip    [ESC/i/Space] Resume |"
-    [[ "${UI_MODE:-}" == "drop" ]] && footer="| [1-9] Drop Item    [ESC/d/Space] Resume |"
+    local footer="│ [1-9] Use/Equip    [ESC/i/Space] Resume │"
+    [[ "${UI_MODE:-}" == "drop" ]] && footer="│ [1-9] Drop Item    [ESC/d/Space] Resume │"
     lines+=(
-        "|-----------------------------------------|"
+        "├─────────────────────────────────────────┤"
         "$footer"
-        "+-----------------------------------------+"
+        "└─────────────────────────────────────────┘"
     )
-    local box_h=${#lines[@]} box_w=${#lines[0]}
-    local start_y=$(( (MAP_H - box_h) / 2 + 1 ))
-    local start_x=$(( (MAP_W - box_w) / 2 + 1 ))
-    (( start_y < 1 )) && start_y=1
-    (( start_x < 1 )) && start_x=1
-    for ((i=0; i<box_h; i++)); do
-        printf '\e[%d;%dH%s%s%s' $((start_y + i)) "$start_x" "$CYAN" "${lines[$i]}" "$RESET"
-    done
+    draw_modal "$CYAN" "$MAP_H" "${lines[@]}"
 }
 
 center_text() {
@@ -363,19 +477,19 @@ render_tombstone() {
     c_year="$(center_text "$year" 18)"
 
     local stone=(
-        '               ----------               '
-        '              /          \              '
-        '             /    REST    \             '
-        '            /      IN      \            '
-        '           /     PEACE      \           '
-        '          /                  \          '
-        "          |${c_who}|          "
-        "          |${c_au}|          "
-        "          |${c_verb}|          "
-        "          |${c_by}|          "
-        "          |${c_year}|          "
-        '         *|     *  *  *      | *        '
-        '_________)/\_//(\/(/\)/\//\/\|_)________'
+        '               ┌────────┐               '
+        '              ┌┘        └┐              '
+        '             ┌┘   REST   └┐             '
+        '            ┌┘     IN     └┐            '
+        '           ┌┘    PEACE     └┐           '
+        '          ┌┘                └┐          '
+        "          │${c_who}│          "
+        "          │${c_au}│          "
+        "          │${c_verb}│          "
+        "          │${c_by}│          "
+        "          │${c_year}│          "
+        '         ♣│     ♣  ♣  ♣      │ ♣        '
+        '──────────┴──────────────────┴──────────'
     )
     local epitaph=(
         "Goodbye ${who} the Level ${LEVEL} Adventurer..."
@@ -416,15 +530,15 @@ render_tombstone() {
 render_possessions() {
     local total_def=$(( DEF + AC_BOOST ))
     local lines=(
-        "+------------------------- POSSESSIONS IDENTIFIED -------------------------+"
-        "| $(pad_right "Wielded : $WEAPON (+$ATK ATK)" 72) |"
-        "| $(pad_right "Worn    : $ARMOR (+$total_def AC)" 72) |"
-        "| $(pad_right "Purse   : $GOLD Au" 72) |"
-        "|--------------------------------------------------------------------------|"
+        "┌───────────────────────── POSSESSIONS IDENTIFIED ─────────────────────────┐"
+        "│ $(pad_right "Wielded : $WEAPON (+$ATK ATK)" 72) │"
+        "│ $(pad_right "Worn    : $ARMOR (+$total_def AC)" 72) │"
+        "│ $(pad_right "Purse   : $GOLD Au" 72) │"
+        "├──────────────────────────────────────────────────────────────────────────┤"
     )
     local i
     if (( ${#INVENTORY[@]} == 0 )); then
-        lines+=("| $(pad_right "(Your pack was empty.)" 72) |")
+        lines+=("│ $(pad_right "(Your pack was empty.)" 72) │")
     else
         for ((i=0; i<${#INVENTORY[@]}; i++)); do
             local key="${INVENTORY[$i]}"
@@ -437,23 +551,16 @@ render_possessions() {
                 entry="[$(($i + 1))] $full_name"
             fi
             IDENTIFIED["$key"]=1
-            lines+=("| $(pad_right "$entry" 72) |")
+            lines+=("│ $(pad_right "$entry" 72) │")
         done
     fi
     lines+=(
-        "|--------------------------------------------------------------------------|"
-        "|                 [Press Space, Enter, ESC, or q to exit]                  |"
-        "+--------------------------------------------------------------------------+"
+        "├──────────────────────────────────────────────────────────────────────────┤"
+        "│                 [Press Space, Enter, ESC, or q to exit]                  │"
+        "└──────────────────────────────────────────────────────────────────────────┘"
     )
     echo -ne "$CLR"
-    local box_h=${#lines[@]} box_w=${#lines[0]}
-    local start_y=$(( (MAP_H + 3 - box_h) / 2 + 1 ))
-    local start_x=$(( (MAP_W - box_w) / 2 + 1 ))
-    (( start_y < 1 )) && start_y=1
-    (( start_x < 1 )) && start_x=1
-    for ((i=0; i<box_h; i++)); do
-        printf '\e[%d;%dH%s%s%s' $((start_y + i)) "$start_x" "$CYAN" "${lines[$i]}" "$RESET"
-    done
+    draw_modal "$CYAN" "$((MAP_H + 3))" "${lines[@]}"
 }
 
 handle_move() {

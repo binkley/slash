@@ -15,8 +15,8 @@ COPY test.sh .
 # Ensure scripts have correct permissions and verify test suite during build
 RUN chmod +x game.sh slash test.sh && ./test.sh
 
-# Set the environment to support 256 colors
-ENV TERM=xterm-256color
+# Set the environment to support 256 colors and UTF-8 box-drawing glyphs
+ENV TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 # Explicitly invoke bash so we can pass flags via command line
 ENTRYPOINT ["/bin/bash", "game.sh"]
